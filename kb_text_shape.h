@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.21 - text segmentation and shaping
+/*  kb_text_shape - v2.22 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,8 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.22  - Fix a segmentation bug where a line with an unknown script would inherit the next
+             line's script.
      2.21  - Eliminate redundant typedefs for C99 compatibility.
      2.20  - Properly check kbts__InputCodepoint return values.
              Handle null shape configs in kbts_PlaceGlyphConfig.
@@ -28231,11 +28233,13 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
   // or we have only seen common/inherited scripts so far.
   // Either way, we want everything before us to coerce to our type, so don't actually break,
   // and do not update the script break position.
-  if((FlushFlags & KBTS__BREAK_FLUSH_FLAG_SCRIPT) &&
-     ScriptCountAtBeginningOfUpdate)
+  if(FlushFlags & KBTS__BREAK_FLUSH_FLAG_SCRIPT)
   {
-    kbts__DoBreak(State, ScriptPositionOffset, KBTS_BREAK_FLAG_SCRIPT, 0, 0, BreakScript);
-    ScriptPositionOffset = 0;
+    if(ScriptCountAtBeginningOfUpdate)
+    {
+      kbts__DoBreak(State, ScriptPositionOffset, KBTS_BREAK_FLAG_SCRIPT, 0, 0, BreakScript);
+      ScriptPositionOffset = 0;
+    }
 
     if(HardLineBreak)
     {

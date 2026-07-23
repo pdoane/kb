@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.22 - text segmentation and shaping
+/*  kb_text_shape - v2.23 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,7 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.23  - Improve direction inference at the end of paragraphs and for short paragraphs.
      2.22  - Fix a segmentation bug where a line with an unknown script would inherit the next
              line's script.
      2.21  - Eliminate redundant typedefs for C99 compatibility.
@@ -3612,7 +3613,7 @@ typedef struct kbts_break_state
   kbts_u8 BidirectionalClass2;
   kbts_u8 BidirectionalClass1;
   kbts_s16 Bidirectional1PositionOffset;
-  kbts_s16 Bidirectional2PositionOffset;
+  kbts_s16 Bidirectional2PositionOffset; // Unused
 
   kbts_japanese_line_break_style JapaneseLineBreakStyle;
   kbts_break_config_flags ConfigFlags;
@@ -27236,7 +27237,6 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
   kbts_u8 BreakScript = ScriptSet[0];
   kbts__break_flush_flags FlushFlags = 0;
   kbts_s16 Bidirectional1PositionOffset = State->Bidirectional1PositionOffset;
-  kbts_s16 Bidirectional2PositionOffset = State->Bidirectional2PositionOffset;
   kbts_u8 Bidirectional2 = State->BidirectionalClass2;
   kbts_u8 Bidirectional1 = State->BidirectionalClass1;
 
@@ -27324,364 +27324,6 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
       }
     }
   }
-
-  // Script breaking.
-  if(EndOfText)
-  {
-    FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
-  }
-
-  if(CodepointScriptCount < 2)
-  {
-    // We special case this entire path because, supposedly, this is the common case.
-    kbts_u8 CodepointScript = (kbts_u8)CodepointScriptOffset;
-
-    if((CodepointScript == KBTS_SCRIPT_DONT_KNOW) ||
-       (CodepointScript == KBTS_SCRIPT_DEFAULT) ||
-       (CodepointScript == KBTS_SCRIPT_DEFAULT2))
-    {
-      // Nothing to do.
-    }
-    else
-    {
-      kbts_u32 ScriptSetMatch = 0;
-      KBTS__FOR(ScriptIndex, 0, ScriptCount)
-      {
-        ScriptSetMatch |= (ScriptSet[ScriptIndex] == CodepointScript);
-      }
-
-      if(!ScriptSetMatch)
-      {
-        FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
-      }
-
-      ScriptCount = 1;
-      ScriptSet[0] = CodepointScript;
-    }
-  }
-  else
-  {
-    // Refine the script set.
-    kbts_un NewScriptCount = 0;
-
-    {
-      kbts_un CodepointScriptIndex = 0;
-      kbts_un ScriptIndex = 0;
-
-      while((ScriptIndex < ScriptCount) &&
-            (CodepointScriptIndex < CodepointScriptCount))
-      {
-        kbts_u8 CodepointScript = CodepointScripts[CodepointScriptIndex];
-        kbts_u8 Script = ScriptSet[ScriptIndex];
-
-        if(CodepointScript < Script)
-        {
-          CodepointScriptIndex += 1;
-        }
-        else if(Script < CodepointScript)
-        {
-          ScriptIndex += 1;
-        }
-        else
-        {
-          ScriptSet[NewScriptCount++] = Script;
-
-          CodepointScriptIndex += 1;
-          ScriptIndex += 1;
-        }
-      }
-    }
-
-    if(!NewScriptCount)
-    {
-      FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
-
-      KBTS__FOR(CodepointScriptIndex, 0, CodepointScriptCount)
-      {
-        ScriptSet[CodepointScriptIndex] = CodepointScripts[CodepointScriptIndex];
-      }
-      ScriptCount = (kbts_u32)CodepointScriptCount;
-    }
-    else
-    {
-      ScriptCount = (kbts_u32)NewScriptCount;
-    }
-  }
-
-  // Direction breaking.
-  if(EndOfText)
-  {
-    BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI;
-  }
-
-  if(BidirectionalClass != KBTS_UNICODE_BIDIRECTIONAL_CLASS_BN) // Formatting characters should be ignored.
-  {
-    switch(BidirectionalClass)
-    {
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_NSM: BidirectionalClass = Bidirectional1; break;
-
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_L:
-      Flags &= ~(KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L | KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR);
-      break;
-
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_R:
-      Flags |= KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L;
-      Flags &= ~KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR;
-      break;
-
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_AL:
-      // Rule W3 occurs before W7, so we treat AL as R for the purposes of rule W7.
-      Flags |= (KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR | KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L);
-      BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
-      break;
-
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN:
-      if(Flags & KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR)
-      {
-        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN;
-        goto CaseAn;
-      }
-      if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN) &&
-         ((Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES) ||
-          (Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS)))
-      {
-        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN;
-      }
-
-      // We test State->ParagraphDirection here because we do not want
-      // digits to coerce to L when the paragrpah direction is unknown.
-      // It might be cleaner to explicitly store the last strong direction seen,
-      // with DONT_KNOW as an option.
-      // @Cleanup
-      if(State->ParagraphDirection &&
-         !(Flags & KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L))
-      {
-        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
-      }
-      break;
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN:
-      CaseAn:;
-      if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN) &&
-         (Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))
-      {
-        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN;
-      }
-      break;
-    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET:
-      if(Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN)
-      {
-        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN;
-      }
-      break;
-    }
-
-    // This rule has a lower priority than AN CS AN -> AN AN AN, so we have to wait until slot 1 to apply it.
-    if(KBTS__IN_SET(Bidirectional1, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET)
-                                                (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES)
-                                                (KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))))
-    {
-      Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI;
-    }
-
-    if(Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI)
-    {
-      if(KBTS__IN_SET(BidirectionalClass, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI)
-                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET)
-                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES)
-                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))))
-      {
-        // All of these input classes end up resolving to NI later on anyway if they are preceded by NI.
-        // We are in a situation where:
-        // - We have an NI in slot 1
-        // - The direction in slot 0 will eventually resolve to NI due to the NI in slot 1
-        // - Storing multiple NIs in our shift buffer is redundant, because no rule necessitates multiple NIs
-        // - NIs don't interact with anything, except that they resolve when surrounded by strong characters
-        // - NIs are resolved in groups. As per the Unicode specification:
-        //     N1. A sequence of NIs takes the direction of the surrounding strong text if the text on both
-        //         sides has the same direction.
-        // This means we can merge the current bidirectional class with the preceding NI, bump the offset,
-        // and it just works.
-        goto SkipDirectionBreak;
-      }
-      else if(((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_R) ||
-               (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)) &&
-              KBTS__IN_SET(Bidirectional2, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)
-                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
-                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))) &&
-              KBTS__IN_SET(BidirectionalClass, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)
-                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
-                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))))
-      {
-        // From the Unicode Bidirectional Algorithm:
-        //   European and Arabic numbers act as if they were R in terms of their influence on NIs.
-        //
-        // Note that the way we resolve digits is different from the way the Unicode standard specifies it.
-        // This is because the standard assumes the paragraph direction is always known, whereas in our case it isn't.
-        // We want neutral surrounded by uncoerced digits to resolve to the paragraph direction, which may be DONT_KNOW.
-        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
-      }
-      else if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L) &&
-              (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L))
-      {
-        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
-      }
-      else
-      {
-        if     (State->ParagraphDirection == KBTS_DIRECTION_LTR) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
-        else if(State->ParagraphDirection == KBTS_DIRECTION_RTL) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
-        // Otherwise, don't coerce to anything.
-      }
-    }
-
-    FlushFlags |= KBTS__BREAK_FLUSH_FLAG_DIRECTION_2;
-    if(EndOfText)
-    {
-      FlushFlags |= KBTS__BREAK_FLUSH_FLAG_DIRECTION_1;
-    }
-  }
-  else
-  {
-    SkipDirectionBreak:;
-    State->Bidirectional2PositionOffset -= (kbts_s16)PositionIncrement;
-    State->Bidirectional1PositionOffset -= (kbts_s16)PositionIncrement;
-  }
-
-  { // Grapheme breaking.
-    if(EndOfText && !StartOfText)
-    {
-      KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 1);
-      State->GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START;
-    }
-    else
-    {
-      kbts_u8 GraphemeBreakState = kbts_GraphemeBreakTransition[GraphemeBreakClass][State->GraphemeBreakState];
-      switch(GraphemeBreakState)
-      {
-      case KBTS_GRAPHEME_BREAK_STATE_b01: KBTS_BREAK2(KBTS_BREAK_FLAG_GRAPHEME, 1, 0); GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START; break;
-      case KBTS_GRAPHEME_BREAK_STATE_b0: KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 0); GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START; break;
-
-      case KBTS_GRAPHEME_BREAK_STATE_b1:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toCR:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toL:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toLVxV:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toLVTxT:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toIndicConsonantxIndicLinker:
-      case KBTS_GRAPHEME_BREAK_STATE_PADDING0: // Padding values are just here to help the compiler.
-      case KBTS_GRAPHEME_BREAK_STATE_PADDING1:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toExtendedPictographic:
-      case KBTS_GRAPHEME_BREAK_STATE_PADDING2:
-      case KBTS_GRAPHEME_BREAK_STATE_PADDING3:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toRI:
-      case KBTS_GRAPHEME_BREAK_STATE_b1toSKIP:
-        KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 1);
-        GraphemeBreakState -= KBTS_GRAPHEME_BREAK_STATE_b1;
-      }
-
-      State->GraphemeBreakState = GraphemeBreakState;
-    }
-  }
-
-  // Word breaks.
-  // We buffer 3 characters for word breaks.
-  // Each character gets 3 bits (padded to 4) representing 3 levels of priority.
-  #define KBTS_WORD_BREAK_BITS(Priority, Position) (((1u << ((Priority) + 1)) - 1) << ((Position) * 4))
-  #define KBTS_C2(A, B) case (KBTS_WORD_BREAK_CLASS_##A << 8) | (KBTS_WORD_BREAK_CLASS_##B)
-  #define KBTS_C3(A, B, C) case (KBTS_WORD_BREAK_CLASS_##A << 16) | (KBTS_WORD_BREAK_CLASS_##B << 8) | (KBTS_WORD_BREAK_CLASS_##C)
-
-  // Ignore [EX FO ZWJ] after ^[_sot_ CR LF NL].
-  // @Cleanup: This is the only time we explicitly use EX and FO. They can be merged.
-  if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_EX)(KBTS_WORD_BREAK_CLASS_FO)(KBTS_WORD_BREAK_CLASS_ZWJ))) &&
-     !KBTS__IN_SET(LastWordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_SOT)(KBTS_WORD_BREAK_CLASS_CR)(KBTS_WORD_BREAK_CLASS_LF)(KBTS_WORD_BREAK_CLASS_NL))))
-  {
-    WordBreak2PositionOffset -= (kbts_s16)PositionIncrement;
-    State->WordBreak2PositionOffset = WordBreak2PositionOffset;
-  }
-  else
-  {
-    kbts_u32 WordBreaks = State->WordBreaks << 4;
-    kbts_u32 WordUnbreaks = State->WordUnbreaks << 4;
-    WordBreakHistory = (WordBreakHistory << 8) | WordBreakClass;
-
-    WordBreaks |= KBTS_WORD_BREAK_BITS(0, 1) | KBTS_WORD_BREAK_BITS(0, 0);
-    if(StartOfText)
-    {
-      WordBreaks |= KBTS_WORD_BREAK_BITS(2, 1);
-    }
-
-    if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_CR)(KBTS_WORD_BREAK_CLASS_LF)(KBTS_WORD_BREAK_CLASS_NL))))
-    {
-      WordBreaks |= KBTS_WORD_BREAK_BITS(1, 1) | KBTS_WORD_BREAK_BITS(1, 0);
-    }
-    else if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_Oep)(KBTS_WORD_BREAK_CLASS_ALep))))
-    {
-      // ZWJ x {Extended_Pictographic}
-      if(LastWordBreakClassIncludingIgnored == KBTS_WORD_BREAK_CLASS_ZWJ)
-      {
-        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1);
-      }
-    }
-
-    switch(WordBreakHistory & 0xFFFF)
-    {
-      KBTS_C2(CR, LF): WordUnbreaks |= KBTS_WORD_BREAK_BITS(1, 1); break;
-
-      KBTS_C2(WSS, WSS):
-        // WSS x WSS is a special rule, because it is supposed to happen _before_ ignores.
-        if(WordBreak2PositionOffset >= 0) WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1);
-        break;
-
-      // (RI RI)* RI x RI
-      KBTS_C2(RI, RI):
-        WordBreakHistory = 0;
-        KBTS__FALLTHROUGH;
-      KBTS_C2(HL, SQ):
-      KBTS_C2(ALnep, ALnep): KBTS_C2(ALnep, ALep): KBTS_C2(ALnep, HL): KBTS_C2(ALnep, NM): KBTS_C2(ALnep, ENL):
-      KBTS_C2(ALep, ALnep): KBTS_C2(ALep, ALep): KBTS_C2(ALep, HL): KBTS_C2(ALep, NM): KBTS_C2(ALep, ENL):
-      KBTS_C2(HL, ALnep): KBTS_C2(HL, ALep): KBTS_C2(HL, HL): KBTS_C2(HL, NM): KBTS_C2(HL, ENL):
-      KBTS_C2(NM, ALnep): KBTS_C2(NM, ALep): KBTS_C2(NM, HL): KBTS_C2(NM, NM): KBTS_C2(NM, ENL):
-      KBTS_C2(KA, KA): KBTS_C2(KA, ENL):
-      KBTS_C2(ENL, ALnep): KBTS_C2(ENL, ALep): KBTS_C2(ENL, HL): KBTS_C2(ENL, NM): KBTS_C2(ENL, KA): KBTS_C2(ENL, ENL):
-        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1); break;
-    }
-
-    switch(WordBreakHistory & 0xFFFFFF)
-    {
-      KBTS_C3(ALnep, ML, ALnep): KBTS_C3(ALnep, ML, ALep): KBTS_C3(ALnep, ML, HL):
-      KBTS_C3(ALnep, MNL, ALnep): KBTS_C3(ALnep, MNL, ALep): KBTS_C3(ALnep, MNL, HL):
-      KBTS_C3(ALnep, SQ, ALnep): KBTS_C3(ALnep, SQ, ALep): KBTS_C3(ALnep, SQ, HL):
-      KBTS_C3(ALep, ML, ALnep): KBTS_C3(ALep, ML, ALep): KBTS_C3(ALep, ML, HL):
-      KBTS_C3(ALep, MNL, ALnep): KBTS_C3(ALep, MNL, ALep): KBTS_C3(ALep, MNL, HL):
-      KBTS_C3(ALep, SQ, ALnep): KBTS_C3(ALep, SQ, ALep): KBTS_C3(ALep, SQ, HL):
-      KBTS_C3(HL, ML, ALnep): KBTS_C3(HL, ML, ALep): KBTS_C3(HL, ML, HL):
-      KBTS_C3(HL, MNL, ALnep): KBTS_C3(HL, MNL, ALep): KBTS_C3(HL, MNL, HL):
-      KBTS_C3(HL, SQ, ALnep): KBTS_C3(HL, SQ, ALep): KBTS_C3(HL, SQ, HL):
-      KBTS_C3(HL, DQ, HL):
-      KBTS_C3(NM, MN, NM): KBTS_C3(NM, MNL, NM): KBTS_C3(NM, SQ, NM):
-        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1) | KBTS_WORD_BREAK_BITS(0, 2); break;
-    }
-
-    kbts_u32 EffectiveWordBreaks = WordBreaks & ~WordUnbreaks;
-    if(EffectiveWordBreaks & KBTS_WORD_BREAK_BITS(2, 2))
-    {
-      kbts__DoBreak(State, PositionOffset2 + WordBreak2PositionOffset, KBTS_BREAK_FLAG_WORD, 0, 0, 0);
-    }
-    if(EndOfText)
-    {
-      // Always break at the end of the text.
-      KBTS_BREAK(KBTS_BREAK_FLAG_WORD, 1);
-      // Do not break after the end of the text.
-    }
-
-    State->WordBreaks = (kbts_u16)WordBreaks;
-    State->WordUnbreaks = (kbts_u16)WordUnbreaks;
-    State->LastWordBreakClass = WordBreakClass;
-    State->WordBreak2PositionOffset = 0;
-    State->WordBreakHistory = WordBreakHistory;
-  }
-  State->LastWordBreakClassIncludingIgnored = WordBreakClass;
-  #undef KBTS_WORD_BREAK_BITS
-  #undef KBTS_C2
-  #undef KBTS_C3
 
   kbts_s16 LineBreak3PositionOffset = State->LineBreak3PositionOffset;
   kbts_s16 LineBreak2PositionOffset = State->LineBreak2PositionOffset;
@@ -28227,6 +27869,365 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
     State->LineUnbreaksAsync = LineUnbreaksAsync;
   }
 
+  // Script breaking.
+  if(EndOfText)
+  {
+    FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
+  }
+
+  if(CodepointScriptCount < 2)
+  {
+    // We special case this entire path because, supposedly, this is the common case.
+    kbts_u8 CodepointScript = (kbts_u8)CodepointScriptOffset;
+
+    if((CodepointScript == KBTS_SCRIPT_DONT_KNOW) ||
+       (CodepointScript == KBTS_SCRIPT_DEFAULT) ||
+       (CodepointScript == KBTS_SCRIPT_DEFAULT2))
+    {
+      // Nothing to do.
+    }
+    else
+    {
+      kbts_u32 ScriptSetMatch = 0;
+      KBTS__FOR(ScriptIndex, 0, ScriptCount)
+      {
+        ScriptSetMatch |= (ScriptSet[ScriptIndex] == CodepointScript);
+      }
+
+      if(!ScriptSetMatch)
+      {
+        FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
+      }
+
+      ScriptCount = 1;
+      ScriptSet[0] = CodepointScript;
+    }
+  }
+  else
+  {
+    // Refine the script set.
+    kbts_un NewScriptCount = 0;
+
+    {
+      kbts_un CodepointScriptIndex = 0;
+      kbts_un ScriptIndex = 0;
+
+      while((ScriptIndex < ScriptCount) &&
+            (CodepointScriptIndex < CodepointScriptCount))
+      {
+        kbts_u8 CodepointScript = CodepointScripts[CodepointScriptIndex];
+        kbts_u8 Script = ScriptSet[ScriptIndex];
+
+        if(CodepointScript < Script)
+        {
+          CodepointScriptIndex += 1;
+        }
+        else if(Script < CodepointScript)
+        {
+          ScriptIndex += 1;
+        }
+        else
+        {
+          ScriptSet[NewScriptCount++] = Script;
+
+          CodepointScriptIndex += 1;
+          ScriptIndex += 1;
+        }
+      }
+    }
+
+    if(!NewScriptCount)
+    {
+      FlushFlags |= KBTS__BREAK_FLUSH_FLAG_SCRIPT;
+
+      KBTS__FOR(CodepointScriptIndex, 0, CodepointScriptCount)
+      {
+        ScriptSet[CodepointScriptIndex] = CodepointScripts[CodepointScriptIndex];
+      }
+      ScriptCount = (kbts_u32)CodepointScriptCount;
+    }
+    else
+    {
+      ScriptCount = (kbts_u32)NewScriptCount;
+    }
+  }
+
+  // Direction breaking.
+  if(EndOfText)
+  {
+    BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI;
+  }
+
+  if(BidirectionalClass != KBTS_UNICODE_BIDIRECTIONAL_CLASS_BN) // Formatting characters should be ignored.
+  {
+    switch(BidirectionalClass)
+    {
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_NSM: BidirectionalClass = Bidirectional1; break;
+
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_L:
+      Flags &= ~(KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L | KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR);
+      break;
+
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_R:
+      Flags |= KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L;
+      Flags &= ~KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR;
+      break;
+
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_AL:
+      // Rule W3 occurs before W7, so we treat AL as R for the purposes of rule W7.
+      Flags |= (KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR | KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L);
+      BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
+      break;
+
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN:
+      if(Flags & KBTS_BREAK_STATE_FLAG_SAW_AL_AFTER_LR)
+      {
+        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN;
+        goto CaseAn;
+      }
+      if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN) &&
+         ((Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES) ||
+          (Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS)))
+      {
+        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN;
+      }
+
+      // We test State->ParagraphDirection here because we do not want
+      // digits to coerce to L when the paragrpah direction is unknown.
+      // It might be cleaner to explicitly store the last strong direction seen,
+      // with DONT_KNOW as an option.
+      // @Cleanup
+      if(State->ParagraphDirection &&
+         !(Flags & KBTS_BREAK_STATE_FLAG_SAW_R_AFTER_L))
+      {
+        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
+      }
+      break;
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN:
+      CaseAn:;
+      if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN) &&
+         (Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))
+      {
+        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN;
+      }
+      break;
+    case KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET:
+      if(Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN)
+      {
+        BidirectionalClass = KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN;
+      }
+      break;
+    }
+
+    // This rule has a lower priority than AN CS AN -> AN AN AN, so we have to wait until slot 1 to apply it.
+    if(KBTS__IN_SET(Bidirectional1, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET)
+                                                (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES)
+                                                (KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))))
+    {
+      Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI;
+    }
+
+    if(Bidirectional1 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI)
+    {
+      if(!HardLineBreak &&
+         KBTS__IN_SET(BidirectionalClass, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_NI)
+                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ET)
+                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_ES)
+                                                      (KBTS_UNICODE_BIDIRECTIONAL_CLASS_CS))))
+      {
+        // All of these input classes end up resolving to NI later on anyway if they are preceded by NI.
+        // We are in a situation where:
+        // - We have an NI in slot 1
+        // - The direction in slot 0 will eventually resolve to NI due to the NI in slot 1
+        // - Storing multiple NIs in our shift buffer is redundant, because no rule necessitates multiple NIs
+        // - NIs don't interact with anything, except that they resolve when surrounded by strong characters
+        // - NIs are resolved in groups. As per the Unicode specification:
+        //     N1. A sequence of NIs takes the direction of the surrounding strong text if the text on both
+        //         sides has the same direction.
+        // This means we can merge the current bidirectional class with the preceding NI, bump the offset,
+        // and it just works.
+        goto SkipDirectionBreak;
+      }
+      else if(((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_R) ||
+               (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)) &&
+              KBTS__IN_SET(Bidirectional2, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)
+                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
+                                                       (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))) &&
+              KBTS__IN_SET(BidirectionalClass, KBTS__SET32((KBTS_UNICODE_BIDIRECTIONAL_CLASS_R)
+                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_AN)
+                                                           (KBTS_UNICODE_BIDIRECTIONAL_CLASS_EN))))
+      {
+        // From the Unicode Bidirectional Algorithm:
+        //   European and Arabic numbers act as if they were R in terms of their influence on NIs.
+        //
+        // Note that the way we resolve digits is different from the way the Unicode standard specifies it.
+        // This is because the standard assumes the paragraph direction is always known, whereas in our case it isn't.
+        // We want neutral surrounded by uncoerced digits to resolve to the paragraph direction, which may be DONT_KNOW.
+        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
+      }
+      else if((Bidirectional2 == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L) &&
+              (BidirectionalClass == KBTS_UNICODE_BIDIRECTIONAL_CLASS_L))
+      {
+        Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
+      }
+      else
+      {
+        if     (State->ParagraphDirection == KBTS_DIRECTION_LTR) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_L;
+        else if(State->ParagraphDirection == KBTS_DIRECTION_RTL) Bidirectional1 = KBTS_UNICODE_BIDIRECTIONAL_CLASS_R;
+        // Otherwise, don't coerce to anything.
+      }
+    }
+
+    FlushFlags |= KBTS__BREAK_FLUSH_FLAG_DIRECTION_2 |
+                  KBTS__BREAK_FLUSH_FLAG_DIRECTION_1;
+    if(EndOfText)
+    {
+      FlushFlags |= KBTS__BREAK_FLUSH_FLAG_DIRECTION_1;
+    }
+  }
+  else
+  {
+    SkipDirectionBreak:;
+    State->Bidirectional1PositionOffset -= (kbts_s16)PositionIncrement;
+  }
+
+  { // Grapheme breaking.
+    if(EndOfText && !StartOfText)
+    {
+      KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 1);
+      State->GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START;
+    }
+    else
+    {
+      kbts_u8 GraphemeBreakState = kbts_GraphemeBreakTransition[GraphemeBreakClass][State->GraphemeBreakState];
+      switch(GraphemeBreakState)
+      {
+      case KBTS_GRAPHEME_BREAK_STATE_b01: KBTS_BREAK2(KBTS_BREAK_FLAG_GRAPHEME, 1, 0); GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START; break;
+      case KBTS_GRAPHEME_BREAK_STATE_b0: KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 0); GraphemeBreakState = KBTS_GRAPHEME_BREAK_STATE_START; break;
+
+      case KBTS_GRAPHEME_BREAK_STATE_b1:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toCR:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toL:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toLVxV:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toLVTxT:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toIndicConsonantxIndicLinker:
+      case KBTS_GRAPHEME_BREAK_STATE_PADDING0: // Padding values are just here to help the compiler.
+      case KBTS_GRAPHEME_BREAK_STATE_PADDING1:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toExtendedPictographic:
+      case KBTS_GRAPHEME_BREAK_STATE_PADDING2:
+      case KBTS_GRAPHEME_BREAK_STATE_PADDING3:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toRI:
+      case KBTS_GRAPHEME_BREAK_STATE_b1toSKIP:
+        KBTS_BREAK(KBTS_BREAK_FLAG_GRAPHEME, 1);
+        GraphemeBreakState -= KBTS_GRAPHEME_BREAK_STATE_b1;
+      }
+
+      State->GraphemeBreakState = GraphemeBreakState;
+    }
+  }
+
+  // Word breaks.
+  // We buffer 3 characters for word breaks.
+  // Each character gets 3 bits (padded to 4) representing 3 levels of priority.
+  #define KBTS_WORD_BREAK_BITS(Priority, Position) (((1u << ((Priority) + 1)) - 1) << ((Position) * 4))
+  #define KBTS_C2(A, B) case (KBTS_WORD_BREAK_CLASS_##A << 8) | (KBTS_WORD_BREAK_CLASS_##B)
+  #define KBTS_C3(A, B, C) case (KBTS_WORD_BREAK_CLASS_##A << 16) | (KBTS_WORD_BREAK_CLASS_##B << 8) | (KBTS_WORD_BREAK_CLASS_##C)
+
+  // Ignore [EX FO ZWJ] after ^[_sot_ CR LF NL].
+  // @Cleanup: This is the only time we explicitly use EX and FO. They can be merged.
+  if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_EX)(KBTS_WORD_BREAK_CLASS_FO)(KBTS_WORD_BREAK_CLASS_ZWJ))) &&
+     !KBTS__IN_SET(LastWordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_SOT)(KBTS_WORD_BREAK_CLASS_CR)(KBTS_WORD_BREAK_CLASS_LF)(KBTS_WORD_BREAK_CLASS_NL))))
+  {
+    WordBreak2PositionOffset -= (kbts_s16)PositionIncrement;
+    State->WordBreak2PositionOffset = WordBreak2PositionOffset;
+  }
+  else
+  {
+    kbts_u32 WordBreaks = State->WordBreaks << 4;
+    kbts_u32 WordUnbreaks = State->WordUnbreaks << 4;
+    WordBreakHistory = (WordBreakHistory << 8) | WordBreakClass;
+
+    WordBreaks |= KBTS_WORD_BREAK_BITS(0, 1) | KBTS_WORD_BREAK_BITS(0, 0);
+    if(StartOfText)
+    {
+      WordBreaks |= KBTS_WORD_BREAK_BITS(2, 1);
+    }
+
+    if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_CR)(KBTS_WORD_BREAK_CLASS_LF)(KBTS_WORD_BREAK_CLASS_NL))))
+    {
+      WordBreaks |= KBTS_WORD_BREAK_BITS(1, 1) | KBTS_WORD_BREAK_BITS(1, 0);
+    }
+    else if(KBTS__IN_SET(WordBreakClass, KBTS__SET32((KBTS_WORD_BREAK_CLASS_Oep)(KBTS_WORD_BREAK_CLASS_ALep))))
+    {
+      // ZWJ x {Extended_Pictographic}
+      if(LastWordBreakClassIncludingIgnored == KBTS_WORD_BREAK_CLASS_ZWJ)
+      {
+        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1);
+      }
+    }
+
+    switch(WordBreakHistory & 0xFFFF)
+    {
+      KBTS_C2(CR, LF): WordUnbreaks |= KBTS_WORD_BREAK_BITS(1, 1); break;
+
+      KBTS_C2(WSS, WSS):
+        // WSS x WSS is a special rule, because it is supposed to happen _before_ ignores.
+        if(WordBreak2PositionOffset >= 0) WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1);
+        break;
+
+      // (RI RI)* RI x RI
+      KBTS_C2(RI, RI):
+        WordBreakHistory = 0;
+        KBTS__FALLTHROUGH;
+      KBTS_C2(HL, SQ):
+      KBTS_C2(ALnep, ALnep): KBTS_C2(ALnep, ALep): KBTS_C2(ALnep, HL): KBTS_C2(ALnep, NM): KBTS_C2(ALnep, ENL):
+      KBTS_C2(ALep, ALnep): KBTS_C2(ALep, ALep): KBTS_C2(ALep, HL): KBTS_C2(ALep, NM): KBTS_C2(ALep, ENL):
+      KBTS_C2(HL, ALnep): KBTS_C2(HL, ALep): KBTS_C2(HL, HL): KBTS_C2(HL, NM): KBTS_C2(HL, ENL):
+      KBTS_C2(NM, ALnep): KBTS_C2(NM, ALep): KBTS_C2(NM, HL): KBTS_C2(NM, NM): KBTS_C2(NM, ENL):
+      KBTS_C2(KA, KA): KBTS_C2(KA, ENL):
+      KBTS_C2(ENL, ALnep): KBTS_C2(ENL, ALep): KBTS_C2(ENL, HL): KBTS_C2(ENL, NM): KBTS_C2(ENL, KA): KBTS_C2(ENL, ENL):
+        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1); break;
+    }
+
+    switch(WordBreakHistory & 0xFFFFFF)
+    {
+      KBTS_C3(ALnep, ML, ALnep): KBTS_C3(ALnep, ML, ALep): KBTS_C3(ALnep, ML, HL):
+      KBTS_C3(ALnep, MNL, ALnep): KBTS_C3(ALnep, MNL, ALep): KBTS_C3(ALnep, MNL, HL):
+      KBTS_C3(ALnep, SQ, ALnep): KBTS_C3(ALnep, SQ, ALep): KBTS_C3(ALnep, SQ, HL):
+      KBTS_C3(ALep, ML, ALnep): KBTS_C3(ALep, ML, ALep): KBTS_C3(ALep, ML, HL):
+      KBTS_C3(ALep, MNL, ALnep): KBTS_C3(ALep, MNL, ALep): KBTS_C3(ALep, MNL, HL):
+      KBTS_C3(ALep, SQ, ALnep): KBTS_C3(ALep, SQ, ALep): KBTS_C3(ALep, SQ, HL):
+      KBTS_C3(HL, ML, ALnep): KBTS_C3(HL, ML, ALep): KBTS_C3(HL, ML, HL):
+      KBTS_C3(HL, MNL, ALnep): KBTS_C3(HL, MNL, ALep): KBTS_C3(HL, MNL, HL):
+      KBTS_C3(HL, SQ, ALnep): KBTS_C3(HL, SQ, ALep): KBTS_C3(HL, SQ, HL):
+      KBTS_C3(HL, DQ, HL):
+      KBTS_C3(NM, MN, NM): KBTS_C3(NM, MNL, NM): KBTS_C3(NM, SQ, NM):
+        WordUnbreaks |= KBTS_WORD_BREAK_BITS(0, 1) | KBTS_WORD_BREAK_BITS(0, 2); break;
+    }
+
+    kbts_u32 EffectiveWordBreaks = WordBreaks & ~WordUnbreaks;
+    if(EffectiveWordBreaks & KBTS_WORD_BREAK_BITS(2, 2))
+    {
+      kbts__DoBreak(State, PositionOffset2 + WordBreak2PositionOffset, KBTS_BREAK_FLAG_WORD, 0, 0, 0);
+    }
+    if(EndOfText)
+    {
+      // Always break at the end of the text.
+      KBTS_BREAK(KBTS_BREAK_FLAG_WORD, 1);
+      // Do not break after the end of the text.
+    }
+
+    State->WordBreaks = (kbts_u16)WordBreaks;
+    State->WordUnbreaks = (kbts_u16)WordUnbreaks;
+    State->LastWordBreakClass = WordBreakClass;
+    State->WordBreak2PositionOffset = 0;
+    State->WordBreakHistory = WordBreakHistory;
+  }
+  State->LastWordBreakClassIncludingIgnored = WordBreakClass;
+  #undef KBTS_WORD_BREAK_BITS
+  #undef KBTS_C2
+  #undef KBTS_C3
+
   // We flush scripts late because hard line breaks also want to flush scripts.
   //
   // If we have no active script at all, then either we are at the very beginning of the text,
@@ -28248,10 +28249,6 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
     }
   }
 
-  if(FlushFlags & KBTS__BREAK_FLUSH_FLAG_DIRECTION_2)
-  {
-    kbts__FlushDirection(State, &LastDirection, Bidirectional2, Bidirectional2PositionOffset);
-  }
   if(FlushFlags & KBTS__BREAK_FLUSH_FLAG_DIRECTION_1)
   {
     kbts__FlushDirection(State, &LastDirection, Bidirectional1, Bidirectional1PositionOffset);
@@ -28303,7 +28300,6 @@ static void kbts__BreakAddCodepoint(kbts_break_state *State, kbts_u32 Codepoint,
     // Only update the buffer if we've actually flushed something.
     State->BidirectionalClass2 = Bidirectional1;
     State->BidirectionalClass1 = BidirectionalClass;
-    State->Bidirectional2PositionOffset = State->Bidirectional1PositionOffset - (kbts_s16)PositionIncrement;
     State->Bidirectional1PositionOffset = (kbts_s16)-(int)PositionIncrement;
   }
   State->LastDirection = (kbts_u8)LastDirection;
@@ -28448,7 +28444,6 @@ KBTS_EXPORT void kbts_BreakBegin(kbts_break_state *State, kbts_direction Paragra
     State->LineBreak2PositionOffset = -100;
     State->LineBreak3PositionOffset = -100;
     State->Bidirectional1PositionOffset = -100;
-    State->Bidirectional2PositionOffset = -100;
 
     kbts__BreakStateStartParagraph(State);
 

@@ -1,4 +1,4 @@
-/*  kb_text_shape - v2.24 - text segmentation and shaping
+/*  kb_text_shape - v2.25 - text segmentation and shaping
     by Jimmy Lefevre
 
     SECURITY
@@ -1320,6 +1320,8 @@
      See https://unicode.org/reports/tr9 for more information.
 
    VERSION HISTORY
+     2.25  - Check for empty input and context errors in segmentation updates.
+             Clean up mixed line endings.
      2.24  - Improve cmap4 compatibility with old fonts.
      2.23  - Improve direction inference at the end of paragraphs and for short paragraphs.
      2.22  - Fix a segmentation bug where a line with an unknown script would inherit the next
@@ -24418,7 +24420,8 @@ KBTS_EXPORT int kbts_ShapeGetShapeCodepoint(kbts_shape_context *Context, int Cod
 
 static void kbts__UpdateBreaks(kbts_shape_context *Context)
 {
-  if(!(Context->Flags & KBTS__CONTEXT_FLAG_MANUAL_SEGMENTATION))
+  if(!Context->Error &&
+     !(Context->Flags & KBTS__CONTEXT_FLAG_MANUAL_SEGMENTATION))
   {
     kbts_break Break;
     while(kbts_Break(&Context->BreakState, &Break))
@@ -24464,7 +24467,14 @@ static void kbts__UpdateBreaks(kbts_shape_context *Context)
           }
         }
 
-        Context->LastGraphemeBreak->Font = MatchFont;
+        // There are two cases in which LastGraphemeBreak can be 0:
+        // - Either we immediately run out of memory in __InputCodepoint(), in which case we never set the LastGraphemeBreak,
+        //   (This case should be handled by the context error check above.)
+        // - Or the user tries to shape 0 codepoints, either because ShapeUtf8() found invalid codepoints or through normal use.
+        if(Context->LastGraphemeBreak)
+        {
+          Context->LastGraphemeBreak->Font = MatchFont;
+        }
         Context->LastGraphemeBreak = InputCodepoint;
         Context->LastGraphemeBreakIndex = (kbts_u32)BreakPosition;
       }

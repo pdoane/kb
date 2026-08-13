@@ -1,6 +1,7 @@
 CC      ?= cc
 CFLAGS  ?= -O0 -g -Wall -Wextra -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter
 SANFLAGS := -fsanitize=undefined,alignment
+ASANFLAGS := -fsanitize=address -fno-omit-frame-pointer
 TESTDIR := tests
 BUILDDIR := build
 
@@ -18,13 +19,15 @@ ROBOTOFLEX_BIN   := $(BUILDDIR)/test_roboto_flex
 GLYPHCONFIG_BIN  := $(BUILDDIR)/test_glyph_config
 BREAKPOS_BIN     := $(BUILDDIR)/test_break_positions
 MYANMAR_BIN      := $(BUILDDIR)/test_myanmar_cluster
+GSUBGPOSSTUB_BIN := $(BUILDDIR)/test_gsub_gpos_stub
 
-.PHONY: all test ubsan clean
+.PHONY: all test ubsan asan clean
 
-all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN)
+all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN)
 
 test: all
 	$(BREAKPOS_BIN)
+	$(GSUBGPOSSTUB_BIN)
 	$(MYANMAR_BIN)     "$(NOTOSANS_FONT)"
 	$(GLYPHCONFIG_BIN) "$(NOTOSANS_FONT)"
 	$(NOTOSANS_BIN)    "$(NOTOSANS_FONT)"
@@ -37,6 +40,13 @@ test: all
 ubsan:
 	$(MAKE) clean
 	$(MAKE) test CFLAGS='$(CFLAGS) $(SANFLAGS)'
+
+# Rebuild and run every test under -fsanitize=address. Font tables are
+# byteswapped in place inside the blob allocation, so an offset or count that
+# is followed without a bounds check writes out of that allocation.
+asan:
+	$(MAKE) clean
+	$(MAKE) test CFLAGS='$(CFLAGS) $(ASANFLAGS)'
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -54,6 +64,9 @@ $(BREAKPOS_BIN): $(TESTDIR)/test_break_positions.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(MYANMAR_BIN): $(TESTDIR)/test_myanmar_cluster.c kb_text_shape.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(GSUBGPOSSTUB_BIN): $(TESTDIR)/test_gsub_gpos_stub.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:

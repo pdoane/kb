@@ -15836,7 +15836,7 @@ static void kbts__ByteSwapGsubGposCommon(kbts__byteswap_context *Context, kbts__
     Header->FeatureVariationsOffset = kbts__ByteSwap32(Header->FeatureVariationsOffset);
   }
 
-  kbts__script_list *ScriptList = KBTS__POINTER_OFFSET(kbts__script_list, Header, Header->ScriptListOffset);
+  kbts__script_list *ScriptList = Header->ScriptListOffset ? KBTS__POINTER_OFFSET(kbts__script_list, Header, Header->ScriptListOffset) : 0;
   if(!kbts__AlreadyVisited(Context, ScriptList))
   {
     ScriptList->Count = kbts__ByteSwap16(ScriptList->Count);
@@ -15968,7 +15968,7 @@ static void kbts__ByteSwapGsubGposCommon(kbts__byteswap_context *Context, kbts__
     }
   }
 
-  kbts__feature_list *FeatureList = KBTS__POINTER_OFFSET(kbts__feature_list, Header, Header->FeatureListOffset);
+  kbts__feature_list *FeatureList = Header->FeatureListOffset ? KBTS__POINTER_OFFSET(kbts__feature_list, Header, Header->FeatureListOffset) : 0;
   if(!kbts__AlreadyVisited(Context, FeatureList))
   {
     FeatureList->Count = kbts__ByteSwap16(FeatureList->Count);
@@ -26482,6 +26482,13 @@ KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_s
             case KBTS_FOURCC('M', 'V', 'A', 'R'): TableId = KBTS_BLOB_TABLE_ID_MVAR; break;
             }
 
+            if(((TableId == KBTS_BLOB_TABLE_ID_GSUB) || (TableId == KBTS_BLOB_TABLE_ID_GPOS)) &&
+               (TableLength < sizeof(kbts__gsub_gpos)))
+            {
+              // Too short to hold a shaping table header, so there is nothing to traverse.
+              TableId = KBTS_BLOB_TABLE_ID_NONE;
+            }
+
             if(TableId)
             {
               kbts_blob_table *ReadTable = &State->Tables[TableId];
@@ -26504,18 +26511,23 @@ KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_s
           if(Table->Length)
           {
             kbts__gsub_gpos *GsubGpos = KBTS__POINTER_OFFSET(kbts__gsub_gpos, FontData, Table->OffsetFromStartOfFile);
-            kbts_lookup_list *LookupList = KBTS__POINTER_OFFSET(kbts_lookup_list, GsubGpos, kbts__ByteSwap16(GsubGpos->LookupListOffset));
-            kbts_u16 *LookupOffsets = KBTS__POINTER_AFTER(kbts_u16, LookupList);
-            kbts_un LookupCount = kbts__ByteSwap16(LookupList->Count);
+            kbts_un LookupListOffset = kbts__ByteSwap16(GsubGpos->LookupListOffset);
 
-            KBTS__FOR(LookupIndex, 0, LookupCount)
+            if(LookupListOffset)
             {
-              kbts__lookup *Lookup = KBTS__POINTER_OFFSET(kbts__lookup, LookupList, kbts__ByteSwap16(LookupOffsets[LookupIndex]));
+              kbts_lookup_list *LookupList = KBTS__POINTER_OFFSET(kbts_lookup_list, GsubGpos, LookupListOffset);
+              kbts_u16 *LookupOffsets = KBTS__POINTER_AFTER(kbts_u16, LookupList);
+              kbts_un LookupCount = kbts__ByteSwap16(LookupList->Count);
 
-              TotalSubtableCount += kbts__ByteSwap16(Lookup->SubtableCount);
+              KBTS__FOR(LookupIndex, 0, LookupCount)
+              {
+                kbts__lookup *Lookup = KBTS__POINTER_OFFSET(kbts__lookup, LookupList, kbts__ByteSwap16(LookupOffsets[LookupIndex]));
+
+                TotalSubtableCount += kbts__ByteSwap16(Lookup->SubtableCount);
+              }
+
+              TotalLookupCount += LookupCount;
             }
-
-            TotalLookupCount += LookupCount;
           }
         }
 
@@ -27530,28 +27542,31 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
     {
       kbts__ByteSwapGsubGposCommon(&ByteSwapContext, Gsub);
 
-      kbts_lookup_list *LookupList = kbts__GetLookupList(Gsub);
-      LookupList->Count = kbts__ByteSwap16(LookupList->Count);
-      kbts__ByteSwapArray16Context(KBTS__POINTER_AFTER(kbts_u16, LookupList), LookupList->Count, &ByteSwapContext);
-
-      KBTS__FOR(LookupIndex, 0, LookupList->Count)
+      if(Gsub->LookupListOffset)
       {
-        kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
+        kbts_lookup_list *LookupList = kbts__GetLookupList(Gsub);
+        LookupList->Count = kbts__ByteSwap16(LookupList->Count);
+        kbts__ByteSwapArray16Context(KBTS__POINTER_AFTER(kbts_u16, LookupList), LookupList->Count, &ByteSwapContext);
 
-        KBTS_DUMPF("GSUB Lookup %llu:\n", LookupIndex);
-
-        if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
+        KBTS__FOR(LookupIndex, 0, LookupList->Count)
         {
-          kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
-          KBTS_DUMPF("  Flags %u\n", Lookup.Flags);
+          kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
 
-          KBTS__FOR(SubstitutionIndex, 0, Lookup.SubtableCount)
+          KBTS_DUMPF("GSUB Lookup %llu:\n", LookupIndex);
+
+          if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
           {
-            kbts_u16 *Base = KBTS__POINTER_OFFSET(kbts_u16, PackedLookup, Lookup.SubtableOffsets[SubstitutionIndex]);
+            kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
+            KBTS_DUMPF("  Flags %u\n", Lookup.Flags);
 
-            KBTS_DUMPF("  Subtable %llu:\n", SubstitutionIndex);
+            KBTS__FOR(SubstitutionIndex, 0, Lookup.SubtableCount)
+            {
+              kbts_u16 *Base = KBTS__POINTER_OFFSET(kbts_u16, PackedLookup, Lookup.SubtableOffsets[SubstitutionIndex]);
 
-            kbts__ByteSwapGsubLookupSubtable(&ByteSwapContext, Lookup.Type, Base);
+              KBTS_DUMPF("  Subtable %llu:\n", SubstitutionIndex);
+
+              kbts__ByteSwapGsubLookupSubtable(&ByteSwapContext, Lookup.Type, Base);
+            }
           }
         }
       }
@@ -27561,29 +27576,32 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
     {
       kbts__ByteSwapGsubGposCommon(&ByteSwapContext, Gpos);
 
-      kbts_lookup_list *LookupList = kbts__GetLookupList(Gpos);
-      LookupList->Count = kbts__ByteSwap16(LookupList->Count);
-      kbts__ByteSwapArray16Context(KBTS__POINTER_AFTER(kbts_u16, LookupList), LookupList->Count, &ByteSwapContext);
-
-      KBTS__FOR(LookupIndex, 0, LookupList->Count)
+      if(Gpos->LookupListOffset)
       {
-        kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
+        kbts_lookup_list *LookupList = kbts__GetLookupList(Gpos);
+        LookupList->Count = kbts__ByteSwap16(LookupList->Count);
+        kbts__ByteSwapArray16Context(KBTS__POINTER_AFTER(kbts_u16, LookupList), LookupList->Count, &ByteSwapContext);
 
-        KBTS_DUMPF("GPOS Lookup %llu:\n", LookupIndex);
-
-        if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
+        KBTS__FOR(LookupIndex, 0, LookupList->Count)
         {
-          kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
+          kbts__lookup *PackedLookup = kbts__GetLookup(LookupList, LookupIndex);
 
-          KBTS_DUMPF("  Flags %x\n", Lookup.Flags);
+          KBTS_DUMPF("GPOS Lookup %llu:\n", LookupIndex);
 
-          KBTS__FOR(SubstitutionIndex, 0, Lookup.SubtableCount)
+          if(kbts__ByteSwapLookup(&ByteSwapContext, PackedLookup))
           {
-            kbts_u16 *Base = KBTS__POINTER_OFFSET(kbts_u16, PackedLookup, Lookup.SubtableOffsets[SubstitutionIndex]);
-            
-            KBTS_DUMPF("  Subtable %llu:\n", (kbts_un)SubstitutionIndex);
+            kbts__unpacked_lookup Lookup = kbts__UnpackLookup(Gdef, PackedLookup);
 
-            kbts__ByteSwapGposLookupSubtable(&ByteSwapContext, LookupList, Lookup.Type, Base);
+            KBTS_DUMPF("  Flags %x\n", Lookup.Flags);
+
+            KBTS__FOR(SubstitutionIndex, 0, Lookup.SubtableCount)
+            {
+              kbts_u16 *Base = KBTS__POINTER_OFFSET(kbts_u16, PackedLookup, Lookup.SubtableOffsets[SubstitutionIndex]);
+            
+              KBTS_DUMPF("  Subtable %llu:\n", (kbts_un)SubstitutionIndex);
+
+              kbts__ByteSwapGposLookupSubtable(&ByteSwapContext, LookupList, Lookup.Type, Base);
+            }
           }
         }
       }
@@ -27623,7 +27641,7 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
           int InGpos = (TableId == KBTS_BLOB_TABLE_ID_GPOS);
           kbts_shaping_table ShapingTableId = (kbts_shaping_table)(InGpos ? KBTS_SHAPING_TABLE_GPOS : KBTS_SHAPING_TABLE_GSUB);
 
-          if(ShapingTable)
+          if(ShapingTable->LookupListOffset)
           {
             kbts_lookup_list *LookupList = kbts__GetLookupList(ShapingTable);
             KBTS__FOR(LookupIndex, 0, LookupList->Count)

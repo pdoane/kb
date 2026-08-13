@@ -1,6 +1,6 @@
 CC      ?= cc
 CFLAGS  ?= -O0 -g -Wall -Wextra -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter
-SANFLAGS := -fsanitize=undefined,alignment
+SANFLAGS := -fsanitize=undefined,alignment -fno-sanitize-recover=undefined
 ASANFLAGS := -fsanitize=address -fno-omit-frame-pointer
 TESTDIR := tests
 BUILDDIR := build
@@ -36,7 +36,8 @@ test: all
 # Rebuild and run every test under -fsanitize=undefined,alignment. OpenType only
 # 2-byte-aligns many table fields (ItemVariationStore data/region offsets,
 # ConditionSet condition offsets), so this catches any multi-byte font read that
-# bypasses the kbts__ReadU16/U32Unaligned helpers.
+# bypasses the kbts__ReadU16/U32Unaligned helpers. Runtime UB aborts the run so
+# a diagnostic cannot pass silently.
 ubsan:
 	$(MAKE) clean
 	$(MAKE) test CFLAGS='$(CFLAGS) $(SANFLAGS)'

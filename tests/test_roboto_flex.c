@@ -210,6 +210,44 @@ int main(int argc, char **argv)
         "expected AV kerning to differ between weights via GDEF IVS, got %d == %d",
         KernDef, KernBlk);
 
+  // 6. Pushing a font the context parses itself, at a design point named by
+  //    axis values: the advances match pushing the parsed font at the design
+  //    point kbts_GetFontVariation builds from the same values.
+  printf("\nPush-with-variation check: 'Hello' at wght=900, parsed by the context\n");
+  {
+    unsigned char *Copy = (unsigned char *)malloc((size_t)FileSize);
+    memcpy(Copy, FileData, (size_t)FileSize);
+
+    kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
+    kbts_font *Pushed = kbts_ShapePushFontFromMemoryWithVariation(Context, Copy, FileSize, 0, Black, 1);
+    CHECK(Pushed != 0, "kbts_ShapePushFontFromMemoryWithVariation failed");
+
+    kbts_s32 PushedTotal = 0;
+    if(Pushed)
+    {
+      kbts_ShapeBegin(Context, KBTS_DIRECTION_LTR, KBTS_LANGUAGE_DONT_KNOW);
+      kbts_ShapeUtf8(Context, "Hello", 5, KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
+      kbts_ShapeEnd(Context);
+
+      kbts_run Run;
+      while(kbts_ShapeRun(Context, &Run))
+      {
+        kbts_glyph *G;
+        while(kbts_GlyphIteratorNext(&Run.Glyphs, &G))
+        {
+          PushedTotal += G->AdvanceX;
+        }
+      }
+    }
+    printf("  from memory at wght=900 total advance = %d\n", PushedTotal);
+    CHECK(PushedTotal == BlackTotal,
+          "the design point did not reach the pushed font: got %d, expected %d",
+          PushedTotal, BlackTotal);
+
+    kbts_DestroyShapeContext(Context);
+    free(Copy);
+  }
+
   kbts_FreeFont(&Font);
   free(FileData);
 

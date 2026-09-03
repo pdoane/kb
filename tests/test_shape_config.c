@@ -277,6 +277,36 @@ static int OverrideEnablesLookup(kbts_shape_config *Config, const char *FeatureT
   return Enabled != 0;
 }
 
+// Which of a glyph config's overrides reached a lookup. An override on a
+// feature the shape config did not bake changes nothing, and used to do so
+// without saying, so a caller asking for smallcaps from a font that has none
+// got the same silence as one whose font has them.
+static void CheckOverrideBinding(kbts_shape_config *Config)
+{
+  kbts_feature_override Overrides[3];
+  Overrides[0].Tag = KBTS_FOURCC('s','m','c','p'); // listed by the language system
+  Overrides[0].Value = 1;
+  Overrides[1].Tag = KBTS_FOURCC('k','e','r','n'); // registered, and not in this font
+  Overrides[1].Value = 1;
+  Overrides[2].Tag = KBTS_FOURCC('z','e','r','o'); // the last of the 43 listed features
+  Overrides[2].Value = 1;
+
+  kbts_glyph_config *GlyphConfig = kbts_CreateGlyphConfig(Config, Overrides, 3, 0, 0);
+  CHECK(GlyphConfig != 0, "kbts_CreateGlyphConfig failed");
+  if(!GlyphConfig) return;
+
+  CHECK(kbts_GlyphConfigOverrideBound(GlyphConfig, 0),
+        "the override on smcp, which the language system lists, did not bind");
+  CHECK(!kbts_GlyphConfigOverrideBound(GlyphConfig, 1),
+        "the override on kern, which the font does not list, bound");
+  CHECK(kbts_GlyphConfigOverrideBound(GlyphConfig, 2),
+        "the override on zero, the last feature the language system lists, did not bind");
+  CHECK(!kbts_GlyphConfigOverrideBound(GlyphConfig, 3),
+        "an index past the override list bound");
+
+  kbts_DestroyGlyphConfig(GlyphConfig);
+}
+
 int main(void)
 {
   // A font with DFLT, and a Latin script whose language systems differ.
@@ -322,6 +352,7 @@ int main(void)
         CHECK(OverrideEnablesLookup(Config, FeatureTags[FEATURE_COUNT - 1]),
               "an override on feature %d of %d (%s) enabled no lookup: the config dropped it",
               FEATURE_COUNT, FEATURE_COUNT, FeatureTags[FEATURE_COUNT - 1]);
+        CheckOverrideBinding(Config);
         kbts_DestroyShapeConfig(Config);
       }
     }

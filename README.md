@@ -73,8 +73,9 @@ void Example(void)
 ### Variable fonts
 
 A variable font (e.g. `NotoSans[wdth,wght].ttf`) ships many design styles in
-one .ttf. Pick a design point with `kbts_SetFontVariations`, passing a sparse
-list of `(axis-tag, user-value)` pairs in 16.16 fixed:
+one .ttf. Pick a design point with `kbts_GetFontVariation`, passing a sparse
+list of `(axis-tag, user-value)` pairs in 16.16 fixed. The font itself does not
+change; you hold the `kbts_font_variation` and hand it to the shaper:
 
 ```c
 kbts_font Font = kbts_FontFromFile("NotoSans[wdth,wght].ttf", 0, 0, 0, &FileData, &FileSize);
@@ -84,9 +85,14 @@ kbts_axis_value Values[] = {
   { KBTS_FOURCC('w','g','h','t'), 700 << 16 },
   { KBTS_FOURCC('w','d','t','h'), (87 << 16) | 32768 }, // 87.5
 };
-kbts_SetFontVariations(&Font, Values, 2);
+kbts_font_variation Variation;
+kbts_GetFontVariation(&Font, Values, 2, &Variation);
 
-// Subsequent shapes pick up advances, metrics, kerning, and feature swaps for the new design point.
+kbts_ShapePushFontWithVariation(Context, &Font, &Variation);
+
+// Shapes on that font now use the advances, kerning, and feature swaps of the
+// design point. kbts_CreateShapeConfigWithVariation is the low-level equivalent,
+// and kbts_GetFontInfo2WithVariation reports its metrics and style.
 ```
 
 `kbts_FontVariationAxisCount` / `kbts_GetFontVariationAxis` enumerate the

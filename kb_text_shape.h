@@ -24254,6 +24254,10 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_font_vari
         kbts__langsys *ChosenLangsys = 0;
         kbts_u32 DesiredTag = ScriptProperties->Tag;
 
+        kbts__ot_script *MatchingScript = 0;
+        kbts__ot_script *FallbackScripts[3] = {0, 0, 0};
+        int MatchIsIndic3 = 0;
+
         KBTS__FOR(ScriptIndex, 0, ScriptList->Count)
         {
           kbts__script_pointer ThisScript = kbts__GetScript(ScriptList, ScriptIndex);
@@ -24263,37 +24267,51 @@ static kbts_shape_config *kbts__PlaceShapeConfig(kbts_font *Font, kbts_font_vari
           // Nevertheless, Harfbuzz at least checks for '3' at the end of script tags, and, if one exists, they choose USE.
           int Indic3 = (ThisScript.Tag >> 24) == '3';
           kbts_u32 MatchMask = Indic3 ? 0xFFFFFF : 0xFFFFFFFF;
-          int PerfectMatch = !((Tag ^ DesiredTag) & MatchMask);
-          if(!ScriptIndex || PerfectMatch || (Tag == KBTS_FOURCC('D', 'F', 'L', 'T')))
+          if(!((Tag ^ DesiredTag) & MatchMask))
           {
-            kbts__langsys *Langsys = kbts__GetDefaultLangsys(ThisScript.Script);
-            KBTS__FOR(LangsysIndex, 0, ThisScript.Script->Count)
-            {
-              kbts__langsys_pointer LangsysPointer = kbts__GetLangsys(ThisScript.Script, LangsysIndex);
+            MatchingScript = ThisScript.Script;
+            MatchIsIndic3 = Indic3;
+            break;
+          }
 
-              if(LangsysPointer.Tag == Language)
-              {
-                Langsys = LangsysPointer.Langsys;
-                break;
-              }
-            }
+          // Fallbacks, in the order Harfbuzz tries them when the script we want is absent.
+          if(Tag == KBTS_FOURCC('D', 'F', 'L', 'T'))      FallbackScripts[0] = ThisScript.Script;
+          else if(Tag == KBTS_FOURCC('d', 'f', 'l', 't')) FallbackScripts[1] = ThisScript.Script;
+          else if(Tag == KBTS_FOURCC('l', 'a', 't', 'n')) FallbackScripts[2] = ThisScript.Script;
+        }
 
-            // It is tempting to try to look for another script if the one we want has no langsys.
-            // However, it is possible for a script to purposefully have no langsys at all. In that case,
-            // the shaper should not apply any GSUB features.
-            // So, store the result _regardless_ of whether Langsys is null or not.
-            ChosenLangsys = Langsys;
-            if(ShapingTableIndex == KBTS_SHAPING_TABLE_GSUB)
+        kbts__ot_script *ChosenScript = MatchingScript;
+        KBTS__FOR(FallbackIndex, 0, KBTS__ARRAY_LENGTH(FallbackScripts))
+        {
+          if(ChosenScript) break;
+          ChosenScript = FallbackScripts[FallbackIndex];
+        }
+
+        if(ChosenScript)
+        {
+          kbts__langsys *Langsys = kbts__GetDefaultLangsys(ChosenScript);
+          KBTS__FOR(LangsysIndex, 0, ChosenScript->Count)
+          {
+            kbts__langsys_pointer LangsysPointer = kbts__GetLangsys(ChosenScript, LangsysIndex);
+
+            if(LangsysPointer.Tag == Language)
             {
-              // Apparently, it is allowed to have script-specific GSUB tables, and a huge DFLT GPOS table.
-              FoundScriptIsIndic3 = Indic3;
-            }
-            // And then get out if we found the appropriate script, even if the langsys is null!
-            if(PerfectMatch)
-            {
+              Langsys = LangsysPointer.Langsys;
               break;
             }
           }
+
+          // It is tempting to try to look for another script if the one we want has no langsys.
+          // However, it is possible for a script to purposefully have no langsys at all. In that case,
+          // the shaper should not apply any GSUB features.
+          // So, store the result _regardless_ of whether Langsys is null or not.
+          ChosenLangsys = Langsys;
+        }
+
+        if(ShapingTableIndex == KBTS_SHAPING_TABLE_GSUB)
+        {
+          // Apparently, it is allowed to have script-specific GSUB tables, and a huge DFLT GPOS table.
+          FoundScriptIsIndic3 = MatchIsIndic3;
         }
 
         Config.Langsys[ShapingTableIndex] = ChosenLangsys;

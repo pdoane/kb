@@ -934,6 +934,17 @@
             If [Config] was allocated in kbts_CreateGlyphConfig, frees all of its data.
             Otherwise, does nothing.
 
+          :kbts_GlyphConfigOverrideBound
+          :GlyphConfigOverrideBound
+          kbts_b32 kbts_GlyphConfigOverrideBound(kbts_glyph_config *Config, kbts_u32 OverrideIndex)
+            Nonzero if the override at [OverrideIndex] in the list [Config] was built from
+            reached a lookup. An override binds when the shape config's language system
+            lists the feature and the config holds one of its lookups; an override on any
+            other feature does nothing, and this is how you find out which.
+
+            [OverrideIndex] indexes the [Overrides] array you passed to
+            kbts_SizeOfGlyphConfig and kbts_PlaceGlyphConfig or kbts_CreateGlyphConfig.
+
         DIRECT:SEGMENTATION
           kbts_break_state is the central struct used for segmentation. It contains all of the state
           needed to perform fixed-memory segmentation of text.
@@ -3903,6 +3914,7 @@ KBTS_EXPORT int kbts_SizeOfGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feat
 KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feature_override *Overrides, int OverrideCount, void *Memory);
 KBTS_EXPORT kbts_glyph_config *kbts_CreateGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feature_override *Overrides, int OverrideCount, kbts_allocator_function *Allocator, void *AllocatorData);
 KBTS_EXPORT void kbts_DestroyGlyphConfig(kbts_glyph_config *Config);
+KBTS_EXPORT kbts_b32 kbts_GlyphConfigOverrideBound(kbts_glyph_config *Config, kbts_u32 OverrideIndex);
 
 // A shape_scratchpad holds all transient runtime shaping data.
 // While the shape_config is immutable and can be trivially shared among threads, a
@@ -13361,6 +13373,9 @@ struct kbts_glyph_config
 
   kbts__enabled_lookup *NonBinaryEnabledLookups;
   kbts_u32 NonBinaryEnabledLookupCount;
+
+  kbts_u32 *BoundOverrideBits; // One bit per override, in the order they were passed in.
+  kbts_u32 OverrideCount;
 };
 
 typedef struct kbts__arena_block
@@ -24060,9 +24075,12 @@ KBTS_EXPORT int kbts_SizeOfGlyphConfig(kbts_shape_config *ShapeConfig, kbts_feat
   kbts__matrix_index LastRowEntryMatrixIndex = kbts__IdSequentialLookupMatrixIndex(LastSequentialLookupIndex, 0, SequentialLookupCount);
   kbts_un MatrixRowSizeInBytes = sizeof(kbts_u32) * (LastRowEntryMatrixIndex.WordIndex + 1);
 
+  kbts_un BoundOverrideSizeInBytes = sizeof(kbts_u32) * ((kbts_un)(OverrideCount + 31) / 32);
+
   kbts_un Result = sizeof(kbts_glyph_config) +
                    NonBinaryOverrideCount * sizeof(kbts__enabled_lookup) +
-                   MatrixRowSizeInBytes * 2;
+                   MatrixRowSizeInBytes * 2 +
+                   BoundOverrideSizeInBytes;
   return (int)Result;
 }
 
@@ -24083,6 +24101,13 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     KBTS_MEMSET(EnabledLookupBits, 0, MatrixRowSizeInBytes);
     kbts_u32 *DisabledLookupBits = (kbts_u32 *)kbts__PointerPush(&Bump, MatrixRowSizeInBytes, KBTS_ALIGNOF(kbts_u32));
     KBTS_MEMSET(DisabledLookupBits, 0, MatrixRowSizeInBytes);
+    kbts_un BoundOverrideSizeInBytes = sizeof(kbts_u32) * ((kbts_un)(OverrideCount + 31) / 32);
+    kbts_u32 *BoundOverrideBits = 0;
+    if(BoundOverrideSizeInBytes)
+    {
+      BoundOverrideBits = (kbts_u32 *)kbts__PointerPush(&Bump, BoundOverrideSizeInBytes, KBTS_ALIGNOF(kbts_u32));
+      KBTS_MEMSET(BoundOverrideBits, 0, BoundOverrideSizeInBytes);
+    }
 
     kbts__enabled_lookup NonBinaryEnabledLookups[KBTS_MAX_SIMULTANEOUS_FEATURES];
     kbts_un NonBinaryEnabledLookupCount = 0;
@@ -24114,6 +24139,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
       while(kbts__NextFeature(&IterateFeatures))
       {
         kbts_feature_override *FoundOverride = 0;
+        kbts_un FoundOverrideIndex = 0;
 
         KBTS__FOR(OverrideIndex, 0, (kbts_un)OverrideCount)
         {
@@ -24122,6 +24148,7 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
           if(Override->Tag == IterateFeatures.CurrentFeatureTag)
           {
             FoundOverride = Override;
+            FoundOverrideIndex = OverrideIndex;
 
             break;
           }
@@ -24157,6 +24184,8 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
 
             if(Found)
             {
+              BoundOverrideBits[FoundOverrideIndex / 32] |= 1u << (FoundOverrideIndex % 32);
+
               kbts__matrix_index SequentialMatrixIndex = kbts__IdSequentialLookupMatrixIndex(FoundSequentialLookupIndex, 0, SequentialLookupCount);
               if(FoundOverride->Value)
               {
@@ -24191,6 +24220,8 @@ KBTS_EXPORT kbts_glyph_config *kbts_PlaceGlyphConfig(kbts_shape_config *ShapeCon
     Result->NonBinaryEnabledLookupCount = (kbts_u32)NonBinaryEnabledLookupCount;
     Result->EnabledLookupBits = EnabledLookupBits;
     Result->DisabledLookupBits = DisabledLookupBits;
+    Result->BoundOverrideBits = BoundOverrideBits;
+    Result->OverrideCount = (kbts_u32)OverrideCount;
   }
 
   kbts__feature_set OverriddenFeatures = KBTS__ZERO;
@@ -24216,6 +24247,18 @@ KBTS_EXPORT kbts_glyph_config *kbts_CreateGlyphConfig(kbts_shape_config *ShapeCo
   {
     Result->Allocator = Allocator;
     Result->AllocatorData = AllocatorData;
+  }
+
+  return Result;
+}
+
+KBTS_EXPORT kbts_b32 kbts_GlyphConfigOverrideBound(kbts_glyph_config *Config, kbts_u32 OverrideIndex)
+{
+  kbts_b32 Result = 0;
+
+  if(Config && Config->BoundOverrideBits && (OverrideIndex < Config->OverrideCount))
+  {
+    Result = (Config->BoundOverrideBits[OverrideIndex / 32] >> (OverrideIndex % 32)) & 1;
   }
 
   return Result;

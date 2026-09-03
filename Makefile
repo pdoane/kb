@@ -20,14 +20,16 @@ GLYPHCONFIG_BIN  := $(BUILDDIR)/test_glyph_config
 BREAKPOS_BIN     := $(BUILDDIR)/test_break_positions
 MYANMAR_BIN      := $(BUILDDIR)/test_myanmar_cluster
 GSUBGPOSSTUB_BIN := $(BUILDDIR)/test_gsub_gpos_stub
+SHAPECONFIG_BIN  := $(BUILDDIR)/test_shape_config
 
 .PHONY: all test ubsan asan clean
 
-all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN)
+all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN) $(SHAPECONFIG_BIN)
 
 test: all
 	$(BREAKPOS_BIN)
 	$(GSUBGPOSSTUB_BIN)
+	$(SHAPECONFIG_BIN)
 	$(MYANMAR_BIN)     "$(NOTOSANS_FONT)"
 	$(GLYPHCONFIG_BIN) "$(NOTOSANS_FONT)"
 	$(NOTOSANS_BIN)    "$(NOTOSANS_FONT)"
@@ -68,6 +70,9 @@ $(MYANMAR_BIN): $(TESTDIR)/test_myanmar_cluster.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(GSUBGPOSSTUB_BIN): $(TESTDIR)/test_gsub_gpos_stub.c kb_text_shape.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(SHAPECONFIG_BIN): $(TESTDIR)/test_shape_config.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:

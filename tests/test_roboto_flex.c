@@ -30,12 +30,12 @@ static void PrintTag(kbts_u32 Tag)
 
 // Shape `Text` and write each glyph's ID + AdvanceX into Glyphs/Advances arrays.
 // Returns the glyph count.
-static int ShapeAndCapture(kbts_font *Font, const char *Text, int Length,
+static int ShapeAndCapture(kbts_font *Font, kbts_font_variation *Variation, const char *Text, int Length,
                             kbts_u16 *Glyphs, kbts_s32 *Advances, int Capacity)
 {
   int Count = 0;
   kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
-  kbts_ShapePushFont(Context, Font);
+  kbts_ShapePushFontWithVariation(Context, Font, Variation);
   kbts_ShapeBegin(Context, KBTS_DIRECTION_LTR, KBTS_LANGUAGE_DONT_KNOW);
   kbts_ShapeUtf8(Context, Text, Length, KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
   kbts_ShapeEnd(Context);
@@ -102,11 +102,12 @@ int main(int argc, char **argv)
   kbts_axis_value Thin[]  = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)100 << 16 } };
   kbts_axis_value Black[] = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)900 << 16 } };
 
-  kbts_SetFontVariations(&Font, Thin, 1);
-  int ThinCount = ShapeAndCapture(&Font, "Hello", 5, GlyphsThin, AdvThin, 16);
+  kbts_font_variation VariationThin, VariationBlack;
+  kbts_GetFontVariation(&Font, Thin, 1, &VariationThin);
+  kbts_GetFontVariation(&Font, Black, 1, &VariationBlack);
 
-  kbts_SetFontVariations(&Font, Black, 1);
-  int BlackCount = ShapeAndCapture(&Font, "Hello", 5, GlyphsBlack, AdvBlack, 16);
+  int ThinCount = ShapeAndCapture(&Font, &VariationThin, "Hello", 5, GlyphsThin, AdvThin, 16);
+  int BlackCount = ShapeAndCapture(&Font, &VariationBlack, "Hello", 5, GlyphsBlack, AdvBlack, 16);
 
   CHECK(ThinCount == BlackCount, "Glyph count differed: thin=%d black=%d", ThinCount, BlackCount);
 
@@ -129,8 +130,9 @@ int main(int argc, char **argv)
   kbts_u16 GlyphsDefault[16], GlyphsAlt[16];
   kbts_s32 AdvDefault[16], AdvAlt[16];
 
-  kbts_SetFontVariations(&Font, 0, 0);  // reset to default instance
-  int DefCount = ShapeAndCapture(&Font, "$", 1, GlyphsDefault, AdvDefault, 16);
+  kbts_font_variation VariationDefault;
+  kbts_GetFontVariation(&Font, 0, 0, &VariationDefault);
+  int DefCount = ShapeAndCapture(&Font, &VariationDefault, "$", 1, GlyphsDefault, AdvDefault, 16);
 
   // Hit Record 0: opsz in [0, 0.169] AND wght in [0.333, 1.0]. Default opsz=14;
   // normalized 0 == default. wght=900 -> normalized ~0.833. Both conditions match.
@@ -138,8 +140,9 @@ int main(int argc, char **argv)
     { KBTS_FOURCC('o','p','s','z'), (kbts_s32)14 << 16 },
     { KBTS_FOURCC('w','g','h','t'), (kbts_s32)900 << 16 },
   };
-  kbts_SetFontVariations(&Font, Heavy, 2);
-  int AltCount = ShapeAndCapture(&Font, "$", 1, GlyphsAlt, AdvAlt, 16);
+  kbts_font_variation VariationHeavy;
+  kbts_GetFontVariation(&Font, Heavy, 2, &VariationHeavy);
+  int AltCount = ShapeAndCapture(&Font, &VariationHeavy, "$", 1, GlyphsAlt, AdvAlt, 16);
 
   CHECK(DefCount == AltCount, "glyph count differed: default=%d alt=%d", DefCount, AltCount);
   CHECK(DefCount == 1, "expected one glyph for $, got %d", DefCount);
@@ -161,12 +164,12 @@ int main(int argc, char **argv)
   InfoDefault.Base.Size = sizeof(InfoDefault);
   InfoBigCaps.Base.Size = sizeof(InfoBigCaps);
 
-  kbts_SetFontVariations(&Font, 0, 0);
-  kbts_GetFontInfo2(&Font, (kbts_font_info2 *)&InfoDefault);
+  kbts_GetFontInfo2WithVariation(&Font, &VariationDefault, (kbts_font_info2 *)&InfoDefault);
 
   kbts_axis_value YTUC[] = { { KBTS_FOURCC('Y','T','U','C'), (kbts_s32)760 << 16 } };
-  kbts_SetFontVariations(&Font, YTUC, 1);
-  kbts_GetFontInfo2(&Font, (kbts_font_info2 *)&InfoBigCaps);
+  kbts_font_variation VariationBigCaps;
+  kbts_GetFontVariation(&Font, YTUC, 1, &VariationBigCaps);
+  kbts_GetFontInfo2WithVariation(&Font, &VariationBigCaps, (kbts_font_info2 *)&InfoBigCaps);
 
   printf("  default:        cap=%d\n", InfoDefault.CapitalHeight);
   printf("  YTUC=max(760):  cap=%d\n", InfoBigCaps.CapitalHeight);
@@ -188,12 +191,10 @@ int main(int argc, char **argv)
   kbts_u16 GA_def[8], GAv_def[8], GA_blk[8], GAv_blk[8];
   kbts_s32 AA_def[8], AAv_def[8], AA_blk[8], AAv_blk[8];
 
-  kbts_SetFontVariations(&Font, 0, 0);
-  ShapeAndCapture(&Font, "A ", 2, GA_def,  AA_def,  8);
-  ShapeAndCapture(&Font, "AV", 2, GAv_def, AAv_def, 8);
-  kbts_SetFontVariations(&Font, Black, 1);
-  ShapeAndCapture(&Font, "A ", 2, GA_blk,  AA_blk,  8);
-  ShapeAndCapture(&Font, "AV", 2, GAv_blk, AAv_blk, 8);
+  ShapeAndCapture(&Font, &VariationDefault, "A ", 2, GA_def,  AA_def,  8);
+  ShapeAndCapture(&Font, &VariationDefault, "AV", 2, GAv_def, AAv_def, 8);
+  ShapeAndCapture(&Font, &VariationBlack,   "A ", 2, GA_blk,  AA_blk,  8);
+  ShapeAndCapture(&Font, &VariationBlack,   "AV", 2, GAv_blk, AAv_blk, 8);
 
   kbts_s32 KernDef = AAv_def[0] - AA_def[0];
   kbts_s32 KernBlk = AAv_blk[0] - AA_blk[0];

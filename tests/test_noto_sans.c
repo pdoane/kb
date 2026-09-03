@@ -117,40 +117,51 @@ int main(int argc, char **argv)
   }
 
   // Direct sparse-axis API.
-  printf("\nkbts_SetFontVariations direct API:\n");
+  printf("\nkbts_GetFontVariation direct API:\n");
   {
-    // Set wght=700 directly via the sparse API.
+    kbts_font_variation Variation;
+
+    // Pick wght=700 through the sparse API.
     kbts_axis_value V[] = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)700 << 16 } };
-    kbts_SetFontVariations(&Font, V, 1);
-    CHECK(Font.NormalizedCoords[0] == 9994, "wght=700 should give 9994 normalized, got %d", Font.NormalizedCoords[0]);
-    CHECK(Font.NormalizedCoords[1] == 0, "wdth should default to 0, got %d", Font.NormalizedCoords[1]);
+    kbts_GetFontVariation(&Font, V, 1, &Variation);
+    CHECK(Variation.NormalizedCoords[0] == 9994, "wght=700 should give 9994 normalized, got %d", Variation.NormalizedCoords[0]);
+    CHECK(Variation.NormalizedCoords[1] == 0, "wdth should default to 0, got %d", Variation.NormalizedCoords[1]);
+    CHECK(Variation.AxisCount == 2, "expected 2 axes in the variation, got %u", Variation.AxisCount);
 
     kbts_font_info2 Info; Info.Size = sizeof(Info);
-    kbts_GetFontInfo2(&Font, &Info);
+    kbts_GetFontInfo2WithVariation(&Font, &Variation, &Info);
     CHECK(Info.Weight == KBTS_FONT_WEIGHT_BOLD, "weight after wght=700 expected BOLD, got %d", Info.Weight);
 
-    // ValueCount=0 resets to default-instance.
-    kbts_SetFontVariations(&Font, 0, 0);
-    CHECK(Font.NormalizedCoords[0] == 0, "reset should zero coords");
+    // The font itself is untouched by any of this.
+    Info.Size = sizeof(Info);
     kbts_GetFontInfo2(&Font, &Info);
-    // Without override, weight comes from OS/2 (NotoSans default = Regular = 400).
-    CHECK(Info.Weight == KBTS_FONT_WEIGHT_NORMAL, "after reset, weight should fall back to OS/2 default (NORMAL), got %d", Info.Weight);
+    CHECK(Info.Weight == KBTS_FONT_WEIGHT_NORMAL, "the font's own weight should stay at the OS/2 default (NORMAL), got %d", Info.Weight);
 
-    // Sparse: only set width; weight stays at OS/2 default in reporting.
+    // ValueCount=0 is the default instance.
+    kbts_GetFontVariation(&Font, 0, 0, &Variation);
+    CHECK(Variation.NormalizedCoords[0] == 0, "an empty value list should zero coords");
+    CHECK(!Variation.HasNonDefaultCoordinate, "an empty value list is the default instance");
+    Info.Size = sizeof(Info);
+    kbts_GetFontInfo2WithVariation(&Font, &Variation, &Info);
+    // Without an override, weight comes from OS/2 (NotoSans default = Regular = 400).
+    CHECK(Info.Weight == KBTS_FONT_WEIGHT_NORMAL, "the default instance should fall back to the OS/2 weight (NORMAL), got %d", Info.Weight);
+
+    // Sparse: only pick width; weight stays at the OS/2 default in reporting.
     kbts_axis_value V2[] = { { KBTS_FOURCC('w','d','t','h'), ((kbts_s32)87 << 16) | 32768 } };
-    kbts_SetFontVariations(&Font, V2, 1);
-    CHECK(Font.NormalizedCoords[0] == 0, "wght should default to 0 when not set, got %d", Font.NormalizedCoords[0]);
-    CHECK(Font.NormalizedCoords[1] == -6007, "wdth=87.5 should give -6007 normalized (avar-mapped), got %d", Font.NormalizedCoords[1]);
-    kbts_GetFontInfo2(&Font, &Info);
+    kbts_GetFontVariation(&Font, V2, 1, &Variation);
+    CHECK(Variation.NormalizedCoords[0] == 0, "wght should default to 0 when not set, got %d", Variation.NormalizedCoords[0]);
+    CHECK(Variation.NormalizedCoords[1] == -6007, "wdth=87.5 should give -6007 normalized (avar-mapped), got %d", Variation.NormalizedCoords[1]);
+    Info.Size = sizeof(Info);
+    kbts_GetFontInfo2WithVariation(&Font, &Variation, &Info);
     CHECK(Info.Width == KBTS_FONT_WIDTH_SEMI_CONDENSED, "width should be SEMI_CONDENSED, got %d", Info.Width);
     CHECK(Info.Weight == KBTS_FONT_WEIGHT_NORMAL, "weight should remain at OS/2 default when only width is set, got %d", Info.Weight);
 
     // Unknown tag is silently ignored.
     kbts_axis_value V3[] = { { KBTS_FOURCC('o','p','s','z'), (kbts_s32)12 << 16 } };
-    kbts_SetFontVariations(&Font, V3, 1);
-    CHECK(Font.NormalizedCoords[0] == 0 && Font.NormalizedCoords[1] == 0,
+    kbts_GetFontVariation(&Font, V3, 1, &Variation);
+    CHECK(Variation.NormalizedCoords[0] == 0 && Variation.NormalizedCoords[1] == 0,
           "unknown tag should leave coords at 0 (got %d, %d)",
-          Font.NormalizedCoords[0], Font.NormalizedCoords[1]);
+          Variation.NormalizedCoords[0], Variation.NormalizedCoords[1]);
   }
 
   // HVAR end-to-end: shape "Hello" at three weights, verify advances differ.
@@ -169,11 +180,12 @@ int main(int argc, char **argv)
     for(int CaseIndex = 0; CaseIndex < 3; ++CaseIndex)
     {
       kbts_axis_value V[] = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)((kbts_un)Cases[CaseIndex].W * 100) << 16 } };
-      kbts_SetFontVariations(&Font, V, 1);
+      kbts_font_variation Variation;
+      kbts_GetFontVariation(&Font, V, 1, &Variation);
 
       kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
       CHECK(Context != 0, "kbts_CreateShapeContext returned null");
-      kbts_ShapePushFont(Context, &Font);
+      kbts_ShapePushFontWithVariation(Context, &Font, &Variation);
 
       kbts_ShapeBegin(Context, KBTS_DIRECTION_LTR, KBTS_LANGUAGE_DONT_KNOW);
       kbts_ShapeUtf8(Context, "Hello", 5, KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
@@ -220,11 +232,12 @@ int main(int argc, char **argv)
   printf("\nMVAR check\n");
   {
     kbts_axis_value Black[] = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)900 << 16 } };
-    kbts_SetFontVariations(&Font, Black, 1);
-    kbts_s32 DHasc = kbts__ApplyMvarDelta(&Font, KBTS_FOURCC('h','a','s','c'));
-    kbts_s32 DHdsc = kbts__ApplyMvarDelta(&Font, KBTS_FOURCC('h','d','s','c'));
-    kbts_s32 DXhgt = kbts__ApplyMvarDelta(&Font, KBTS_FOURCC('x','h','g','t'));
-    kbts_s32 DStro = kbts__ApplyMvarDelta(&Font, KBTS_FOURCC('s','t','r','o'));
+    kbts_font_variation VariationBlack;
+    kbts_GetFontVariation(&Font, Black, 1, &VariationBlack);
+    kbts_s32 DHasc = kbts__ApplyMvarDelta(&Font, &VariationBlack, KBTS_FOURCC('h','a','s','c'));
+    kbts_s32 DHdsc = kbts__ApplyMvarDelta(&Font, &VariationBlack, KBTS_FOURCC('h','d','s','c'));
+    kbts_s32 DXhgt = kbts__ApplyMvarDelta(&Font, &VariationBlack, KBTS_FOURCC('x','h','g','t'));
+    kbts_s32 DStro = kbts__ApplyMvarDelta(&Font, &VariationBlack, KBTS_FOURCC('s','t','r','o'));
     printf("  Black deltas: hasc=%d hdsc=%d xhgt=%d stro=%d\n", DHasc, DHdsc, DXhgt, DStro);
     CHECK(DHasc == 0, "expected 0 (NotoSans has no hasc), got %d", DHasc);
     CHECK(DHdsc == 0, "expected 0 (NotoSans has no hdsc), got %d", DHdsc);
@@ -232,12 +245,13 @@ int main(int argc, char **argv)
 
     // GetFontInfo2 ascent/descent should be unchanged across weights (no MVAR records).
     kbts_font_info2_2 InfoBlack; InfoBlack.Base.Size = sizeof(InfoBlack);
-    kbts_GetFontInfo2(&Font, (kbts_font_info2 *)&InfoBlack);
+    kbts_GetFontInfo2WithVariation(&Font, &VariationBlack, (kbts_font_info2 *)&InfoBlack);
 
     kbts_axis_value Thin[] = { { KBTS_FOURCC('w','g','h','t'), (kbts_s32)100 << 16 } };
-    kbts_SetFontVariations(&Font, Thin, 1);
+    kbts_font_variation VariationThin;
+    kbts_GetFontVariation(&Font, Thin, 1, &VariationThin);
     kbts_font_info2_2 InfoThin; InfoThin.Base.Size = sizeof(InfoThin);
-    kbts_GetFontInfo2(&Font, (kbts_font_info2 *)&InfoThin);
+    kbts_GetFontInfo2WithVariation(&Font, &VariationThin, (kbts_font_info2 *)&InfoThin);
 
     CHECK(InfoBlack.Ascent == InfoThin.Ascent,
           "Ascent changed across weight without MVAR hasc record (Black=%d Thin=%d)",

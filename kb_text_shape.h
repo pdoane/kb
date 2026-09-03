@@ -326,6 +326,25 @@
             A [return value] of 0 could mean that the stack is out of space (see
             KBTS_CONTEXT_MAX_FONT_COUNT) or that the font could not be parsed.
 
+          :kbts_ShapePushFontFromFileWithVariation
+          :ShapePushFontFromFileWithVariation
+          :kbts_ShapePushFontFromMemoryWithVariation
+          :ShapePushFontFromMemoryWithVariation
+          kbts_font *kbts_ShapePushFontFromFileWithVariation(kbts_shape_context *Context, const char *FileName,
+                                                             int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount)
+          kbts_font *kbts_ShapePushFontFromMemoryWithVariation(kbts_shape_context *Context, void *Memory, int Size,
+                                                               int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount)
+            The two functions above, at the design point [Values] names. These
+            take the sparse (tag, user-value) list of kbts_GetFontVariation
+            rather than a kbts_font_variation, because a kbts_font_variation is
+            normalized against the font, and the font does not exist until the
+            call parses it. A [ValueCount] of 0 is the default instance, which
+            is what the plain forms pass.
+
+            The design point falls back to the default instance if the font has
+            more axes than KBTS_MAX_VARIATION_AXES. Parse the font yourself and
+            push it with kbts_ShapePushFontWithVariation if you need to know.
+
           :kbts_ShapePushFont
           :ShapePushFont
           kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font *Font)
@@ -4043,8 +4062,12 @@ KBTS_EXPORT kbts_shape_context *kbts_CreateShapeContext(kbts_allocator_function 
 KBTS_EXPORT void kbts_DestroyShapeContext(kbts_shape_context *Context);
 #ifndef KB_TEXT_SHAPE_NO_CRT
 KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile(kbts_shape_context *Context, const char *FileName, int FontIndex);
+// Open and push the font at the design point [Values] names, as kbts_GetFontVariation takes it.
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFileWithVariation(kbts_shape_context *Context, const char *FileName, int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount);
 #endif
 KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context, void *Memory, int Size, int FontIndex);
+// Parse and push the font at the design point [Values] names, as kbts_GetFontVariation takes it.
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemoryWithVariation(kbts_shape_context *Context, void *Memory, int Size, int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount);
 KBTS_EXPORT kbts_font *kbts_ShapePushFont(kbts_shape_context *Context, kbts_font *Font);
 // Shape with [Font] at the design point [Variation] names. The context copies it.
 KBTS_EXPORT kbts_font *kbts_ShapePushFontWithVariation(kbts_shape_context *Context, kbts_font *Font, kbts_font_variation *Variation);
@@ -24837,7 +24860,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePopFont(kbts_shape_context *Context)
 }
 
 #ifndef KB_TEXT_SHAPE_NO_CRT
-KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile(kbts_shape_context *Context, const char *FileName, int FontIndex)
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFileWithVariation(kbts_shape_context *Context, const char *FileName, int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount)
 {
   kbts__context_font *ContextFont = kbts__ShapePushFont(Context);
   kbts_font *Result = 0;
@@ -24852,6 +24875,10 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile(kbts_shape_context *Context, c
       if(!Result->Error)
       {
         ContextFont->Font = Result;
+        if(ValueCount)
+        {
+          kbts_GetFontVariation(Result, Values, ValueCount, &ContextFont->Variation);
+        }
       }
       else
       {
@@ -24867,9 +24894,14 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile(kbts_shape_context *Context, c
 
   return Result;
 }
+
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFile(kbts_shape_context *Context, const char *FileName, int FontIndex)
+{
+  return kbts_ShapePushFontFromFileWithVariation(Context, FileName, FontIndex, 0, 0);
+}
 #endif
 
-KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context, void *Memory, int Length, int FontIndex)
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemoryWithVariation(kbts_shape_context *Context, void *Memory, int Length, int FontIndex, kbts_axis_value *Values, kbts_u32 ValueCount)
 {
   kbts_font *Result = 0;
 
@@ -24895,6 +24927,10 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context,
       if(!Error)
       {
         ContextFont->Font = Result;
+        if(ValueCount)
+        {
+          kbts_GetFontVariation(Result, Values, ValueCount, &ContextFont->Variation);
+        }
       }
       else
       {
@@ -24905,6 +24941,11 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context,
   }
 
   return Result;
+}
+
+KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemory(kbts_shape_context *Context, void *Memory, int Length, int FontIndex)
+{
+  return kbts_ShapePushFontFromMemoryWithVariation(Context, Memory, Length, FontIndex, 0, 0);
 }
 
 static void kbts__EnsureGlyphStorageInitialized(kbts_glyph_storage *Storage)

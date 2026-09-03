@@ -25002,7 +25002,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromFileWithVariation(kbts_shape_contex
   kbts__context_font *ContextFont = kbts__ShapePushFont(Context);
   kbts_font *Result = 0;
 
-  if(!Context->Error)
+  if(!Context->Error && ContextFont)
   {
     Result = kbts__PushType(&Context->FontArena, kbts_font);
     if(Result)
@@ -25046,7 +25046,7 @@ KBTS_EXPORT kbts_font *kbts_ShapePushFontFromMemoryWithVariation(kbts_shape_cont
   {
     kbts__context_font *ContextFont = kbts__ShapePushFont(Context);
 
-    Result = kbts__PushType(&Context->FontArena, kbts_font);
+    Result = ContextFont ? kbts__PushType(&Context->FontArena, kbts_font) : 0;
 
     if(Result)
     {

@@ -836,14 +836,19 @@
 
           :kbts_GetFontVariation
           :GetFontVariation
-          void kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount,
-                                     kbts_font_variation *Out)
+          kbts_b32 kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount,
+                                         kbts_font_variation *Out)
             Fills [Out] with the design point [Values] names. Pass a sparse list
             of (tag, user-value) pairs; any axis tag not in the list stays at its
             fvar default. Tags not present in the font are ignored.
 
             User values are 16.16 fixed in the axis's user-coordinate space.
             Values out of range for an axis are clamped.
+
+            A [return value] of 0 means [Out] is the default instance instead of
+            the design point asked for: the font is invalid, or it has more axes
+            than KBTS_MAX_VARIATION_AXES, which is how many a kbts_font_variation
+            holds. Define KBTS_MAX_VARIATION_AXES yourself to raise it.
 
           :kbts_ShapePushFontWithVariation
           :ShapePushFontWithVariation
@@ -2691,7 +2696,7 @@ typedef struct kbts_instance_info
 } kbts_instance_info;
 
 #ifndef KBTS_MAX_VARIATION_AXES
-#define KBTS_MAX_VARIATION_AXES 16
+#define KBTS_MAX_VARIATION_AXES 32
 #endif
 
 // A design point picked out of a variable font, filled by kbts_GetFontVariation.
@@ -4126,7 +4131,10 @@ KBTS_EXPORT void     kbts_GetFontVariationInstance(kbts_font *Font, kbts_u32 Ind
 // The font is not modified: you own [Out], and pass it to the shaping and font
 // info entry points below. A shape config takes a copy of it, so it is only read
 // during the call it is passed to.
-KBTS_EXPORT void kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount, kbts_font_variation *Out);
+//
+// Returns 0, with [Out] the default instance, if the font is invalid or has more
+// axes than a kbts_font_variation holds (KBTS_MAX_VARIATION_AXES).
+KBTS_EXPORT kbts_b32 kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount, kbts_font_variation *Out);
 KBTS_EXPORT kbts_load_font_error kbts_LoadFont(kbts_font *Font, kbts_load_font_state *State, void *FontData, int FontDataSize, int FontIndex, int *ScratchSize_, int *OutputSize_);
 KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_state *State, void *ScratchMemory, void *OutputMemory);
 KBTS_EXPORT void kbts_GetFontInfo(kbts_font *Font, kbts_font_info *Info);
@@ -26808,20 +26816,23 @@ KBTS_EXPORT void kbts_GetFontVariationInstance(kbts_font *Font, kbts_u32 Index, 
   }
 }
 
-KBTS_EXPORT void kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount, kbts_font_variation *Out)
+KBTS_EXPORT kbts_b32 kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values, kbts_u32 ValueCount, kbts_font_variation *Out)
 {
-  if(!Out) return;
+  if(!Out) return 0;
 
   KBTS_MEMSET(Out, 0, sizeof(*Out));
   Out->Weight = KBTS_FONT_WEIGHT_UNKNOWN;
   Out->Width  = KBTS_FONT_WIDTH_UNKNOWN;
 
-  if(!Font || !kbts_FontIsValid(Font)) return;
+  if(!Font || !kbts_FontIsValid(Font)) return 0;
 
   kbts__fvar *Fvar = kbts__GetFvar(Font);
-  if(!Fvar || (Fvar->AxisCount > KBTS_MAX_VARIATION_AXES) || !ValueCount) return;
+  if(!Fvar) return 1;
+  if(Fvar->AxisCount > KBTS_MAX_VARIATION_AXES) return 0;
 
   Out->AxisCount = Fvar->AxisCount;
+
+  if(!ValueCount) return 1;
 
   kbts__avar *Avar = kbts__GetAvar(Font);
 
@@ -26862,6 +26873,8 @@ KBTS_EXPORT void kbts_GetFontVariation(kbts_font *Font, kbts_axis_value *Values,
     if(HaveItal && (ItalUser >= ((kbts_s32)1 << 15))) Out->Italic = 1;
     if(HaveSlnt && (SlntUser <= -((kbts_s32)5 << 16))) Out->Italic = 1;
   }
+
+  return 1;
 }
 
 static void kbts__MarkMatrixCoverage(kbts_u32 *Matrix, kbts_un TableIndex, kbts_un TableCount, kbts_un GlyphCount, kbts__coverage *Coverage, int SubtableMatrix)

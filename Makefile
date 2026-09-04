@@ -23,10 +23,12 @@ GSUBGPOSSTUB_BIN := $(BUILDDIR)/test_gsub_gpos_stub
 SHAPECONFIG_BIN  := $(BUILDDIR)/test_shape_config
 EVICTION_BIN     := $(BUILDDIR)/test_config_eviction
 VARIATIONAXES_BIN := $(BUILDDIR)/test_variation_axes
+USERFEATURES_BIN := $(BUILDDIR)/test_user_features
+SCRIPTRUNS_BIN   := $(BUILDDIR)/test_script_runs
 
 .PHONY: all test ubsan asan clean
 
-all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN) $(SHAPECONFIG_BIN) $(EVICTION_BIN) $(VARIATIONAXES_BIN)
+all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN) $(SHAPECONFIG_BIN) $(EVICTION_BIN) $(VARIATIONAXES_BIN) $(USERFEATURES_BIN) $(SCRIPTRUNS_BIN)
 
 test: all
 	$(BREAKPOS_BIN)
@@ -35,6 +37,8 @@ test: all
 	$(EVICTION_BIN)
 	$(VARIATIONAXES_BIN)
 	$(MYANMAR_BIN)     "$(NOTOSANS_FONT)"
+	$(SCRIPTRUNS_BIN)  "$(NOTOSANS_FONT)"
+	$(USERFEATURES_BIN) "$(NOTOSANS_FONT)"
 	$(GLYPHCONFIG_BIN) "$(NOTOSANS_FONT)"
 	$(NOTOSANS_BIN)    "$(NOTOSANS_FONT)"
 	$(ROBOTOFLEX_BIN)  "$(ROBOTOFLEX_FONT)"
@@ -83,6 +87,12 @@ $(EVICTION_BIN): $(TESTDIR)/test_config_eviction.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(VARIATIONAXES_BIN): $(TESTDIR)/test_variation_axes.c kb_text_shape.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(USERFEATURES_BIN): $(TESTDIR)/test_user_features.c kb_text_shape.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(SCRIPTRUNS_BIN): $(TESTDIR)/test_script_runs.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 clean:

@@ -4,6 +4,12 @@
 // Both run against synthetic GSUB tables, so the layout under test is written
 // out right here instead of being inferred from a font file.
 //
+// Cache keying: a shape context caches one config per font, script, variation
+// and language. The language was missing from that key, so the first language
+// a run asked for answered every later one, and a caller that set a language
+// -- CSS lang, or font-language-override -- shaped through the language system
+// of whichever run came first.
+//
 // Script selection: the OpenType lookup order is the requested script, then
 // DFLT. kbts used to accept the first script in the list as a fallback, so a
 // font without DFLT answered a request for one script with another script's
@@ -253,6 +259,36 @@ static void CheckLangSys(const char *Name, kbts_font *Font, kbts_script Script, 
   kbts_DestroyShapeConfig(Config);
 }
 
+// A shape context caches the configs it builds. The cache key carries the
+// language, so a request for one language system is not answered with the
+// config built for another.
+static void CheckContextLangSys(kbts_font *Font)
+{
+  kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
+  CHECK(Context != 0, "kbts_CreateShapeContext failed");
+  if(!Context) return;
+
+  kbts_ShapePushFont(Context, Font);
+
+  kbts_shape_config *Default = kbts__FindOrCreateShapeConfig(Context, Font, KBTS_SCRIPT_LATIN, KBTS_LANGUAGE_DONT_KNOW);
+  kbts_shape_config *Turkish = kbts__FindOrCreateShapeConfig(Context, Font, KBTS_SCRIPT_LATIN, KBTS_LANGUAGE_TURKISH);
+  CHECK(Default != 0, "kbts__FindOrCreateShapeConfig failed for the default language");
+  CHECK(Turkish != 0, "kbts__FindOrCreateShapeConfig failed for Turkish");
+
+  if(Default && Turkish)
+  {
+    CHECK(Turkish != Default,
+          "the context answered a Turkish request with the config it built for the default language");
+    CHECK(Turkish->Langsys[KBTS_SHAPING_TABLE_GSUB] == LangSysOf(Font, "latn", KBTS_LANGUAGE_TURKISH),
+          "the context's Turkish config took language system %p, expected TRK's %p",
+          (void *)Turkish->Langsys[KBTS_SHAPING_TABLE_GSUB],
+          (void *)LangSysOf(Font, "latn", KBTS_LANGUAGE_TURKISH));
+  }
+
+  kbts_ShapePopFont(Context);
+  kbts_DestroyShapeContext(Context);
+}
+
 // Nonzero if an override on FeatureTag turns on a lookup in the config.
 static int OverrideEnablesLookup(kbts_shape_config *Config, const char *FeatureTag)
 {
@@ -340,6 +376,7 @@ int main(void)
                    "latn", KBTS_LANGUAGE_DONT_KNOW);
       CheckLangSys("script the font does not list", &Font, KBTS_SCRIPT_GREEK, KBTS_LANGUAGE_DONT_KNOW,
                    "DFLT", KBTS_LANGUAGE_DONT_KNOW);
+      CheckContextLangSys(&Font);
 
       // Every feature the language system lists is available to an override,
       // including the ones past KBTS_MAX_SIMULTANEOUS_FEATURES.

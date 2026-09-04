@@ -13771,6 +13771,7 @@ typedef struct kbts__existing_shape_config
   kbts_font *Font;
   kbts_font_variation Variation;
   kbts_script Script;
+  kbts_language Language;
 } kbts__existing_shape_config;
 
 typedef kbts_u32 kbts__context_flags;
@@ -26296,6 +26297,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
 
       if((Existing->Font == Font) &&
          (Existing->Script == Script) &&
+         (Existing->Language == Language) &&
          kbts__VariationsMatch(&Existing->Variation, Variation))
       {
         Result = Existing->Config;
@@ -26333,6 +26335,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     NewExisting->Font = Font;
     NewExisting->Variation = *Variation;
     NewExisting->Script = Script;
+    NewExisting->Language = Language;
   }
 
   return Result;

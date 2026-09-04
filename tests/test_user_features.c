@@ -7,6 +7,12 @@
 // font-variant-numeric: diagonal-fractions asks for, per css-fonts-4 -- got the
 // filter too, and the run kept its plain digits.
 //
+// Stack order: the context's feature stack applies the latest push of a tag,
+// which the header documents at kbts_ShapePushFeature. The unique-override scan
+// walks the stack from the top down so the latest push lands first, and then
+// the hoisted copy was taken from the raw stack instead of from that scan, so
+// the earliest push of a tag won.
+//
 // A caller's request covers every glyph its lookups match. The shape here is
 // "1/2" with an ASCII solidus, which the shaper never flags, so the fraction
 // forms appear only if the pushed frac reaches those glyphs. Nothing is
@@ -32,7 +38,10 @@ typedef struct shaped
   kbts_u32 Ids[MAX_SHAPED_GLYPHS];
 } shaped;
 
-static shaped Shape(kbts_font *Font, const char *Text, kbts_u32 PushedFeature)
+// Shapes [Text] with [PushCount] pushes of [PushedFeature], taking each push's
+// value from [PushValues] in order.
+static shaped ShapeWithStack(kbts_font *Font, const char *Text, kbts_u32 PushedFeature,
+                             const int *PushValues, int PushCount)
 {
   shaped Result;
   Result.Count = 0;
@@ -40,7 +49,10 @@ static shaped Shape(kbts_font *Font, const char *Text, kbts_u32 PushedFeature)
   kbts_shape_context *Context = kbts_CreateShapeContext(0, 0);
   kbts_ShapePushFont(Context, Font);
   kbts_ShapeBegin(Context, KBTS_DIRECTION_LTR, KBTS_LANGUAGE_DONT_KNOW);
-  if(PushedFeature) kbts_ShapePushFeature(Context, PushedFeature, 1);
+  for(int PushIndex = 0; PushIndex < PushCount; ++PushIndex)
+  {
+    kbts_ShapePushFeature(Context, PushedFeature, PushValues[PushIndex]);
+  }
   kbts_ShapeUtf8(Context, Text, (int)strlen(Text), KBTS_USER_ID_GENERATION_MODE_CODEPOINT_INDEX);
   kbts_ShapeEnd(Context);
 
@@ -57,6 +69,12 @@ static shaped Shape(kbts_font *Font, const char *Text, kbts_u32 PushedFeature)
 
   kbts_DestroyShapeContext(Context);
   return Result;
+}
+
+static shaped Shape(kbts_font *Font, const char *Text, kbts_u32 PushedFeature)
+{
+  int On = 1;
+  return ShapeWithStack(Font, Text, PushedFeature, &On, PushedFeature ? 1 : 0);
 }
 
 static int SameShape(shaped *A, shaped *B)
@@ -110,6 +128,31 @@ int main(int argc, char **argv)
   shaped LettersPushed = Shape(&Font, "ab", KBTS_FEATURE_TAG_frac);
   CHECK(SameShape(&Letters, &LettersPushed),
         "frac pushed over letters, which its lookups do not cover, changed them");
+
+  // The feature stack applies the latest push of a tag. Two digits alone carry
+  // the frac lookups' unconditional substitution, so the two stack orders shape
+  // differently and each says which push won.
+  shaped Digits = Shape(&Font, "12", 0);
+  shaped DigitsFrac = Shape(&Font, "12", KBTS_FEATURE_TAG_frac);
+  CHECK(!SameShape(&Digits, &DigitsFrac),
+        "frac pushed over two digits changed nothing, so the stack order cannot be read here");
+
+  static const int OnThenOff[2] = { 1, 0 };
+  static const int OffThenOn[2] = { 0, 1 };
+  shaped LastOff = ShapeWithStack(&Font, "12", KBTS_FEATURE_TAG_frac, OnThenOff, 2);
+  shaped LastOn = ShapeWithStack(&Font, "12", KBTS_FEATURE_TAG_frac, OffThenOn, 2);
+
+  Print("12", &Digits);
+  Print("12 with frac on", &DigitsFrac);
+  Print("12 with frac on then off", &LastOff);
+  Print("12 with frac off then on", &LastOn);
+
+  CHECK(SameShape(&LastOff, &Digits),
+        "frac pushed on and then off shaped as if it were on: the stack applied the first "
+        "push of the tag, not the latest");
+  CHECK(SameShape(&LastOn, &DigitsFrac),
+        "frac pushed off and then on shaped as if it were off: the stack applied the first "
+        "push of the tag, not the latest");
 
   kbts_FreeFont(&Font);
   free(FileData);

@@ -5208,6 +5208,14 @@ static kbts__script_properties kbts__ScriptProperties[KBTS_SCRIPT_COUNT] = {
   {KBTS_FOURCC('z', 'a', 'n', 'b'), KBTS_SHAPER_USE},
 };
 
+// Two scripts belong to one run when they shape through the same OpenType
+// script table: hiragana and katakana are both `kana`.
+static kbts_b32 kbts__ScriptsShareRun(kbts_script A, kbts_script B)
+{
+  kbts_b32 Result = (A == B) || (kbts__ScriptProperties[A].Tag == kbts__ScriptProperties[B].Tag);
+  return Result;
+}
+
 KBTS_EXPORT kbts_script kbts_ScriptTagToScript(kbts_script_tag Tag)
 {
   kbts_script Result = 0;
@@ -26518,7 +26526,7 @@ KBTS_EXPORT int kbts_ShapeRun(kbts_shape_context *Context, kbts_run *Run)
         }
 
         if((CodepointFont && (CodepointFont != RunFont)) ||
-           (CodepointScript && (CodepointScript != RunScript)) ||
+           (CodepointScript && !kbts__ScriptsShareRun(CodepointScript, RunScript)) ||
            (CodepointDirection && (CodepointDirection != RunDirection)) ||
            (CodepointParagraphDirection && (CodepointParagraphDirection != RunParagraphDirection)) ||
            NewLine)

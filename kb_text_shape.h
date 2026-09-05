@@ -22033,6 +22033,11 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
           LvtGlyphs[LvtGlyphCount++] = NewGlyph;
         }
 
+        for(kbts_un LvtIndex = 0; LvtIndex < LvtGlyphCount; ++LvtIndex)
+        {
+          LvtGlyphs[LvtIndex].UserIdOrCodepointIndex = Glyph->UserIdOrCodepointIndex;
+        }
+
         { // Insert the LVT glyphs.
           kbts_glyph *LastConsumed = Next->Prev;
 

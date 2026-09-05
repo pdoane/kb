@@ -27483,7 +27483,9 @@ KBTS_EXPORT kbts_load_font_error kbts_PlaceBlob(kbts_font *Font, kbts_load_font_
 
           kbts__ByteSwapArray16Unchecked(&Avar->Major, 4);
 
-          if(Avar->Major == 1)
+          // avar version 2 keeps the version 1 segment maps and appends two
+          // Offset32 fields; the maps apply, the item variation store does not.
+          if(Avar->Major == 1 || Avar->Major == 2)
           {
             kbts_u8 *Cursor = (kbts_u8 *)(Avar + 1);
             KBTS__FOR(AxisIndex, 0, Avar->AxisCount)

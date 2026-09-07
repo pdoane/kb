@@ -13780,6 +13780,7 @@ typedef struct kbts__existing_shape_config
 {
   kbts_shape_config *Config;
 
+  kbts_u32 Hash; // Of the key below; nonzero.
   kbts_font *Font;
   kbts_font_variation Variation;
   kbts_script Script;
@@ -13888,6 +13889,14 @@ struct kbts_shape_context
 
   kbts__existing_shape_config_block_header ExistingShapeConfigBlockSentinel;
   kbts__existing_glyph_config_block_header ExistingGlyphConfigBlockSentinel;
+
+  // The cached shape configs by key hash: open addressing over pointers into the
+  // blocks above, a null slot empty, kept under half full. Empty until the first
+  // config is cached; rebuilt in the config arena when it fills or the blocks
+  // are compacted.
+  kbts__existing_shape_config **ShapeConfigIndex;
+  kbts_u32 ShapeConfigIndexCapacity;
+  kbts_u32 ShapeConfigCount;
 
   kbts_u32 ScratchFeatureOverrideCount;
   kbts_feature_override ScratchFeatureOverrides[KBTS_MAX_SIMULTANEOUS_FEATURES];
@@ -24968,6 +24977,8 @@ static kbts_b32 kbts__ShapeConfigIsCached(kbts_shape_context *Context, kbts_shap
 // cache keys shape configs by font pointer and glyph configs by shape config
 // pointer, so an address reused by a later allocation would read these. Their
 // memory stays in the context's config arena until the context is destroyed.
+static kbts_b32 kbts__RebuildShapeConfigIndex(kbts_shape_context *Context);
+
 static void kbts__EvictFontConfigs(kbts_shape_context *Context, kbts_font *Font)
 {
   for(kbts__existing_shape_config_block *Block = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
@@ -24982,7 +24993,12 @@ static void kbts__EvictFontConfigs(kbts_shape_context *Context, kbts_font *Font)
         Block->Items[KeptCount++] = Block->Items[Index];
       }
     }
+    Context->ShapeConfigCount -= Block->Count - KeptCount;
     Block->Count = KeptCount;
+  }
+  if(Context->ShapeConfigIndexCapacity && !kbts__RebuildShapeConfigIndex(Context))
+  {
+    Context->Error = KBTS_SHAPE_ERROR_OUT_OF_MEMORY;
   }
 
   for(kbts__existing_glyph_config_block *Block = (kbts__existing_glyph_config_block *)Context->ExistingGlyphConfigBlockSentinel.Next;
@@ -26309,25 +26325,91 @@ static kbts_font_variation *kbts__ContextFontVariation(kbts_shape_context *Conte
   return Result;
 }
 
+static kbts_u32 kbts__ShapeConfigKeyHash(kbts_font *Font, kbts_script Script, kbts_language Language, kbts_font_variation *Variation)
+{
+  kbts_u64 Hash = (kbts_u64)(kbts_un)Font * 0x9E3779B97F4A7C15ull;
+  Hash ^= ((kbts_u64)Script + 1) * 0xC2B2AE3D27D4EB4Full;
+  Hash ^= ((kbts_u64)Language + 1) * 0x94D049BB133111EBull;
+  Hash ^= (kbts_u64)Variation->HasNonDefaultCoordinate;
+  KBTS__FOR(AxisIndex, 0, KBTS_MAX_VARIATION_AXES)
+  {
+    Hash = (Hash ^ (kbts_u64)(kbts_u16)Variation->NormalizedCoords[AxisIndex]) * 0x100000001B3ull;
+  }
+  Hash ^= Hash >> 29;
+  Hash *= 0xBF58476D1CE4E5B9ull;
+  return (kbts_u32)(Hash >> 32) | 1;
+}
+
+static kbts_b32 kbts__ShapeConfigKeyMatches(kbts__existing_shape_config *Existing, kbts_font *Font, kbts_script Script, kbts_language Language, kbts_font_variation *Variation)
+{
+  kbts_b32 Result = (Existing->Font == Font) &&
+                    (Existing->Script == Script) &&
+                    (Existing->Language == Language) &&
+                    kbts__VariationsMatch(&Existing->Variation, Variation);
+  return Result;
+}
+
+static void kbts__IndexShapeConfig(kbts_shape_context *Context, kbts__existing_shape_config *Existing)
+{
+  kbts_u32 Mask = Context->ShapeConfigIndexCapacity - 1;
+  kbts_u32 Slot = Existing->Hash & Mask;
+  while(Context->ShapeConfigIndex[Slot])
+  {
+    Slot = (Slot + 1) & Mask;
+  }
+  Context->ShapeConfigIndex[Slot] = Existing;
+}
+
+// Rebuilds the index over every cached config, in place when the index is
+// still under half full and otherwise in a larger array from the config arena;
+// an outgrown index stays in the arena until the context is destroyed.
+static kbts_b32 kbts__RebuildShapeConfigIndex(kbts_shape_context *Context)
+{
+  kbts_u32 Capacity = Context->ShapeConfigIndexCapacity ? Context->ShapeConfigIndexCapacity : 64;
+  while(Capacity < Context->ShapeConfigCount * 2)
+  {
+    Capacity *= 2;
+  }
+  if(Capacity != Context->ShapeConfigIndexCapacity)
+  {
+    kbts__existing_shape_config **Index = kbts__PushArray(&Context->ConfigArena, kbts__existing_shape_config *, Capacity);
+    if(!Index)
+    {
+      return 0;
+    }
+    Context->ShapeConfigIndex = Index;
+    Context->ShapeConfigIndexCapacity = Capacity;
+  }
+  KBTS_MEMSET(Context->ShapeConfigIndex, 0, sizeof(*Context->ShapeConfigIndex) * Capacity);
+
+  for(kbts__existing_shape_config_block *Block = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
+      kbts__ExistingShapeConfigBlockIsValid(Context, Block);
+      Block = (kbts__existing_shape_config_block *)Block->Header.Next)
+  {
+    KBTS__FOR(ItemIndex, 0, Block->Count)
+    {
+      kbts__IndexShapeConfig(Context, &Block->Items[ItemIndex]);
+    }
+  }
+
+  return 1;
+}
+
 static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Context, kbts_font *Font, kbts_script Script, kbts_language Language)
 {
   kbts_shape_config *Result = 0;
   kbts_font_variation DefaultVariation = KBTS__ZERO;
   kbts_font_variation *Variation = kbts__ContextFontVariation(Context, Font);
   if(!Variation) Variation = &DefaultVariation;
+  kbts_u32 Hash = kbts__ShapeConfigKeyHash(Font, Script, Language, Variation);
 
-  for(kbts__existing_shape_config_block *ExistingBlock = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Next;
-      kbts__ExistingShapeConfigBlockIsValid(Context, ExistingBlock);
-      ExistingBlock = (kbts__existing_shape_config_block *)ExistingBlock->Header.Next)
+  if(Context->ShapeConfigIndexCapacity)
   {
-    KBTS__FOR(ExistingIndex, 0, ExistingBlock->Count)
+    kbts_u32 Mask = Context->ShapeConfigIndexCapacity - 1;
+    for(kbts_u32 Slot = Hash & Mask; Context->ShapeConfigIndex[Slot]; Slot = (Slot + 1) & Mask)
     {
-      kbts__existing_shape_config *Existing = &ExistingBlock->Items[ExistingIndex];
-
-      if((Existing->Font == Font) &&
-         (Existing->Script == Script) &&
-         (Existing->Language == Language) &&
-         kbts__VariationsMatch(&Existing->Variation, Variation))
+      kbts__existing_shape_config *Existing = Context->ShapeConfigIndex[Slot];
+      if((Existing->Hash == Hash) && kbts__ShapeConfigKeyMatches(Existing, Font, Script, Language, Variation))
       {
         Result = Existing->Config;
 
@@ -26335,7 +26417,7 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
       }
     }
   }
-  
+
   if(!Result)
   {
     kbts__existing_shape_config_block *Last = (kbts__existing_shape_config_block *)Context->ExistingShapeConfigBlockSentinel.Prev;
@@ -26361,10 +26443,26 @@ static kbts_shape_config *kbts__FindOrCreateShapeConfig(kbts_shape_context *Cont
     KBTS_ASSERT(Last->Count < KBTS__EXISTING_SHAPE_CONFIGS_PER_BLOCK);
     kbts__existing_shape_config *NewExisting = &Last->Items[Last->Count++];
     NewExisting->Config = Result;
+    NewExisting->Hash = Hash;
     NewExisting->Font = Font;
     NewExisting->Variation = *Variation;
     NewExisting->Script = Script;
     NewExisting->Language = Language;
+
+    Context->ShapeConfigCount += 1;
+    if(Context->ShapeConfigCount * 2 > Context->ShapeConfigIndexCapacity)
+    {
+      if(!kbts__RebuildShapeConfigIndex(Context))
+      {
+        Context->Error = KBTS_SHAPE_ERROR_OUT_OF_MEMORY;
+
+        return 0;
+      }
+    }
+    else
+    {
+      kbts__IndexShapeConfig(Context, NewExisting);
+    }
   }
 
   return Result;

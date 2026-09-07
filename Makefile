@@ -22,6 +22,7 @@ MYANMAR_BIN      := $(BUILDDIR)/test_myanmar_cluster
 GSUBGPOSSTUB_BIN := $(BUILDDIR)/test_gsub_gpos_stub
 SHAPECONFIG_BIN  := $(BUILDDIR)/test_shape_config
 EVICTION_BIN     := $(BUILDDIR)/test_config_eviction
+CONFIGINDEX_BIN  := $(BUILDDIR)/test_config_index
 VARIATIONAXES_BIN := $(BUILDDIR)/test_variation_axes
 USERFEATURES_BIN := $(BUILDDIR)/test_user_features
 SCRIPTRUNS_BIN   := $(BUILDDIR)/test_script_runs
@@ -30,7 +31,7 @@ AVAR2_BIN        := $(BUILDDIR)/test_avar2_version
 
 .PHONY: all test ubsan asan clean
 
-all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN) $(SHAPECONFIG_BIN) $(EVICTION_BIN) $(VARIATIONAXES_BIN) $(USERFEATURES_BIN) $(SCRIPTRUNS_BIN) $(HANGULINDEX_BIN) $(AVAR2_BIN)
+all: $(NOTOSANS_BIN) $(ROBOTOFLEX_BIN) $(GLYPHCONFIG_BIN) $(BREAKPOS_BIN) $(MYANMAR_BIN) $(GSUBGPOSSTUB_BIN) $(SHAPECONFIG_BIN) $(EVICTION_BIN) $(CONFIGINDEX_BIN) $(VARIATIONAXES_BIN) $(USERFEATURES_BIN) $(SCRIPTRUNS_BIN) $(HANGULINDEX_BIN) $(AVAR2_BIN)
 
 test: all
 	$(BREAKPOS_BIN)
@@ -41,6 +42,7 @@ test: all
 	$(MYANMAR_BIN)     "$(NOTOSANS_FONT)"
 	$(SCRIPTRUNS_BIN)  "$(NOTOSANS_FONT)"
 	$(HANGULINDEX_BIN) "$(NOTOSANS_FONT)"
+	$(CONFIGINDEX_BIN) "$(NOTOSANS_FONT)"
 	$(AVAR2_BIN)       "$(NOTOSANS_FONT)"
 	$(USERFEATURES_BIN) "$(NOTOSANS_FONT)"
 	$(GLYPHCONFIG_BIN) "$(NOTOSANS_FONT)"
@@ -88,6 +90,9 @@ $(SHAPECONFIG_BIN): $(TESTDIR)/test_shape_config.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(EVICTION_BIN): $(TESTDIR)/test_config_eviction.c kb_text_shape.h | $(BUILDDIR)
+	$(CC) $(CFLAGS) -o $@ $<
+
+$(CONFIGINDEX_BIN): $(TESTDIR)/test_config_index.c kb_text_shape.h | $(BUILDDIR)
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(VARIATIONAXES_BIN): $(TESTDIR)/test_variation_axes.c kb_text_shape.h | $(BUILDDIR)

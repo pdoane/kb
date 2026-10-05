@@ -16539,19 +16539,19 @@ static void kbts__ByteSwapDeltaSetIndexMap(kbts__byteswap_context *Context, kbts
       case 0:
       {
         kbts_u16 *MapCount = KBTS__POINTER_AFTER(kbts_u16, Map);
-        *MapCount = kbts__ByteSwap16(*MapCount);
+        EntryCount = kbts__ByteSwap16(kbts__ReadU16Unaligned(MapCount));
+        kbts__WriteU16Unaligned(MapCount, (kbts_u16)EntryCount);
 
         Entries = KBTS__POINTER_AFTER(char, MapCount);
-        EntryCount = *MapCount;
       } break;
 
       case 1:
       {
         kbts_u32 *MapCount = KBTS__POINTER_AFTER(kbts_u32, Map);
-        *MapCount = kbts__ByteSwap32(*MapCount);
+        EntryCount = kbts__ByteSwap32(kbts__ReadU32Unaligned(MapCount));
+        kbts__WriteU32Unaligned(MapCount, (kbts_u32)EntryCount);
 
         Entries = KBTS__POINTER_AFTER(char, MapCount);
-        EntryCount = *MapCount;
       } break;
       }
 
@@ -22281,7 +22281,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
             {
               kbts_u16 *MapCount_ = KBTS__POINTER_AFTER(kbts_u16, AdvanceIndexMap);
 
-              MapCount = *MapCount_;
+              MapCount = kbts__ReadU16Unaligned(MapCount_);
               Map = KBTS__POINTER_AFTER(char, MapCount_);
             } break;
 
@@ -22289,7 +22289,7 @@ static void kbts__ExecuteOp(kbts_shape_scratchpad *Scratchpad, kbts_glyph_storag
             {
               kbts_u32 *MapCount_ = KBTS__POINTER_AFTER(kbts_u32, AdvanceIndexMap);
               
-              MapCount = *MapCount_;
+              MapCount = kbts__ReadU32Unaligned(MapCount_);
               Map = KBTS__POINTER_AFTER(char, MapCount_);
             } break;
             }
